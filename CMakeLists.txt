@@ -16,6 +16,13 @@ add_library(rtsp_core STATIC
     src/net/tcp_socket.cpp
     src/rtsp/rtsp_message.cpp
     src/rtsp/rtsp_stream_parser.cpp
+    src/rtsp/rtsp_session_utils.cpp
+    src/rtsp/rtsp_server_session.cpp
+    src/rtsp/rtsp_client.cpp
+    src/sdp/session_description.cpp
+    src/rtp/rtp_packet.cpp
+    src/media/h264_packetizer.cpp
+    src/media/h264_depacketizer.cpp
 )
 target_include_directories(rtsp_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(rtsp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0600)
@@ -39,6 +46,21 @@ if(BUILD_TESTING)
     target_link_libraries(rtsp_tests PRIVATE rtsp_core)
     add_test(NAME rtsp_tests COMMAND rtsp_tests)
     set_tests_properties(rtsp_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(session_tests tests/session_tests.cpp)
+    target_link_libraries(session_tests PRIVATE rtsp_core)
+    add_test(NAME session_tests COMMAND session_tests)
+    set_tests_properties(session_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(rtp_tests tests/rtp_tests.cpp)
+    target_link_libraries(rtp_tests PRIVATE rtsp_core)
+    add_test(NAME rtp_tests COMMAND rtp_tests)
+    set_tests_properties(rtp_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(h264_tests tests/h264_tests.cpp)
+    target_link_libraries(h264_tests PRIVATE rtsp_core)
+    add_test(NAME h264_tests COMMAND h264_tests)
+    set_tests_properties(h264_tests PROPERTIES TIMEOUT 20)
 endif()
 
 # /utf-8 使 MSVC 正确读取中文注释；两种编译器均开启常用警告。

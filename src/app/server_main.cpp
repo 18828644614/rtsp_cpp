@@ -1,8 +1,10 @@
 #include "app/command_line.h"
 #include "net/tcp_socket.h"
 #include "rtsp/rtsp_message.h"
+#include "rtsp/rtsp_server_session.h"
 #include "rtsp/rtsp_stream_parser.h"
 
+#include <ctime>
 #include <exception>
 #include <iostream>
 #include <stdexcept>
@@ -33,7 +35,7 @@ int main(int argc, char* argv[]) {
         // 1. 创建监听对象，内部依次执行 socket、bind、listen。
         rtsp::net::TcpSocket listener;
         listener.listen(address, port);
-        std::cout << "RTSP demo server listening on " << address << ':'
+        std::cout << "RTSP server listening on " << address << ':'
                   << listener.local_port() << std::endl;
 
         // 2. 新建空的连接对象，accept 把新连接写入这个对象。
@@ -42,11 +44,15 @@ int main(int argc, char* argv[]) {
         listener.accept_client(connection);
         std::cout << "Client connected." << std::endl;
 
-        // 3. 先收字节，再拆消息。一轮读取可能得到半条、一条或多条消息。
+        // 本步是单连接演示，以启动时刻构造 Session 标识，不用于认证。
+        // 后续多客户端版本再加入独立且不可预测的会话标识生成器。
+        rtsp::RtspServerSession session(std::to_string(std::time(nullptr)));
+
+        // 3. 先收字节，再拆消息，再交给状态机生成响应。
         rtsp::RtspStreamParser parser;
         rtsp::RtspStreamItem item;
         char buffer[4096];
-        for (;;) {
+        while (session.state() != rtsp::SessionClosed) {
             const std::size_t count = connection.receive(buffer, sizeof(buffer));
             if (count == 0) {
                 parser.finish();  // 检查是否有被截断的消息残留。
@@ -55,8 +61,16 @@ int main(int argc, char* argv[]) {
             parser.append(buffer, count);
             while (parser.next(item)) {
                 if (item.is_interleaved) {
-                    // 解析器已经可以识别交织帧，但本阶段还没有协商媒体通道。
-                    throw std::runtime_error("unexpected media frame before SETUP");
+                    if (session.state() == rtsp::SessionInit) {
+                        throw std::runtime_error("unexpected media frame before SETUP");
+                    }
+                    const rtsp::TcpTransport transport = session.transport();
+                    if (item.channel != static_cast<unsigned int>(transport.rtp_channel)
+                        && item.channel != static_cast<unsigned int>(transport.rtcp_channel)) {
+                        throw std::runtime_error("frame arrived on an unnegotiated channel");
+                    }
+                    // 这里先跳过已知通道；第六步加入媒体收发，RTCP 单独处理。
+                    continue;
                 }
                 const rtsp::RtspMessage& request = item.message;
                 if (!request.is_request) {
@@ -65,23 +79,18 @@ int main(int argc, char* argv[]) {
                 std::cout << "Request: " << request.method << ", CSeq="
                           << request.header("CSeq") << std::endl;
 
-                // 当前只提供最小 OPTIONS 演示，完整会话流程留到下一步。
-                rtsp::RtspMessage response;
-                response.is_request = false;
-                response.set_header("CSeq", request.header("CSeq"));
-                if (request.method == "OPTIONS") {
-                    response.set_header("Public", "OPTIONS");
-                } else {
-                    response.status_code = 501;
-                    response.reason = "Not Implemented";
-                }
+                const rtsp::RtspMessage response = session.handle(request);
                 const std::string wire = rtsp::serialize_rtsp_message(response);
                 connection.send_all(wire.data(), wire.size());
+                std::cout << "Response: " << response.status_code << ' ' << response.reason
+                          << std::endl;
+                if (session.state() == rtsp::SessionClosed) {
+                    break;  // TEARDOWN 响应已发出，不再等待客户端关闭发送方向。
+                }
             }
         }
 
-        connection.shutdown_send();
-        std::cout << "Client finished.\n";
+        std::cout << "Session finished.\n";
         // 4. 本样例只服务一个连接，处理结束后关闭连接和监听端口。
         connection.close();
         listener.close();
