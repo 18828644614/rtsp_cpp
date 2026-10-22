@@ -21,6 +21,27 @@ int read_number(const std::string& text, int maximum) {
     return number;
 }
 
+std::string base64_encode(const std::string& data) {
+    const std::string alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string result;
+    for (std::size_t offset = 0; offset < data.size(); offset += 3) {
+        const unsigned int first = static_cast<unsigned char>(data[offset]);
+        unsigned int second = 0;
+        unsigned int third = 0;
+        if (offset + 1 < data.size()) {
+            second = static_cast<unsigned char>(data[offset + 1]);
+        }
+        if (offset + 2 < data.size()) {
+            third = static_cast<unsigned char>(data[offset + 2]);
+        }
+        result += alphabet[first >> 2];
+        result += alphabet[((first & 3) << 4) | (second >> 4)];
+        result += offset + 1 < data.size() ? alphabet[((second & 15) << 2) | (third >> 6)] : '=';
+        result += offset + 2 < data.size() ? alphabet[third & 63] : '=';
+    }
+    return result;
+}
+
 void check_line_value(const std::string& value) {
     if (value.find_first_of("\r\n") != std::string::npos) {
         throw std::runtime_error("line break in SDP value");
@@ -28,6 +49,23 @@ void check_line_value(const std::string& value) {
 }
 
 }  // namespace
+
+std::string make_h264_fmtp(const std::string& sps, const std::string& pps) {
+    if (sps.size() < 4 || pps.empty()
+        || (static_cast<unsigned char>(sps[0]) & 0x9f) != 7
+        || (static_cast<unsigned char>(pps[0]) & 0x9f) != 8) {
+        throw std::runtime_error("invalid SPS/PPS for H264 SDP");
+    }
+    const std::string digits = "0123456789abcdef";
+    std::string profile;
+    for (std::size_t index = 1; index <= 3; ++index) {
+        const unsigned int value = static_cast<unsigned char>(sps[index]);
+        profile += digits[value >> 4];
+        profile += digits[value & 15];
+    }
+    return "packetization-mode=1;profile-level-id=" + profile
+           + ";sprop-parameter-sets=" + base64_encode(sps) + "," + base64_encode(pps);
+}
 
 std::string make_sdp(const SessionDescription& description) {
     const MediaTrack& video = description.video;

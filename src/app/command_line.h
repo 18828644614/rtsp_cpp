@@ -6,6 +6,23 @@
 
 namespace rtsp::app {
 
+inline unsigned int parse_frame_limit(const std::string& text) {
+    if (text.empty()) {
+        throw std::invalid_argument("frame_limit must be between 0 and 1000000");
+    }
+    unsigned int result = 0;
+    for (char digit : text) {
+        if (digit < '0' || digit > '9') {
+            throw std::invalid_argument("frame_limit must contain decimal digits only");
+        }
+        result = result * 10 + static_cast<unsigned int>(digit - '0');
+        if (result > 1000000) {
+            throw std::invalid_argument("frame_limit must be between 0 and 1000000");
+        }
+    }
+    return result;
+}
+
 // 按位读取十进制端口，例如 "8554"：8 -> 85 -> 855 -> 8554。
 inline std::uint16_t parse_port(const std::string& text) {
     if (text.empty()) {

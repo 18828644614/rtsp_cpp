@@ -35,11 +35,13 @@ bool duplicate_header(const RtspMessage& request, const std::string& name) {
 
 }  // namespace
 
-RtspServerSession::RtspServerSession(const std::string& session_id) {
+RtspServerSession::RtspServerSession(const std::string& session_id,
+                                   const SessionDescription& description) {
     if (session_id.empty() || session_id.find_first_not_of("0123456789") != std::string::npos) {
         throw std::invalid_argument("this demo uses a nonempty numeric session id");
     }
     session_id_ = session_id;
+    description_ = description;
 }
 
 RtspMessage RtspServerSession::handle(const RtspMessage& request) {
@@ -99,10 +101,9 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
         if (base[base.size() - 1] != '/') {
             base += '/';
         }
-        SessionDescription description;
         response.set_header("Content-Type", "application/sdp");
         response.set_header("Content-Base", base);
-        response.body = make_sdp(description);
+        response.body = make_sdp(description_);
     } else if (method == "SETUP") {
         if (!is_track) {
             return response_for(request, 459, "Aggregate Operation Not Allowed");

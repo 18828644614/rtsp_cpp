@@ -2,7 +2,7 @@
 
 这是一个面向新手的协议学习项目：自己实现 RTSP 会话控制、RTP 收发，以及 H.264 / AAC 的封包和解包。
 
-当前已完成实施路线的 **第 1～5 步：工程骨架、TCP 收发、RTSP 消息拆分、SDP 与完整控制流程，以及内存中的 RTP / H.264 封包解包**。`rtsp_client` 与 `rtsp_server` 可以顺序完成 OPTIONS、DESCRIBE、SETUP、PLAY、TEARDOWN。第五步的媒体模块通过内存测试验证，两个程序仍在 PLAY 成功后立即 TEARDOWN，第六步再接入文件和实际媒体收发。
+当前已完成实施路线的 **第 1～6 步**。服务器读取带 AUD 的 H.264 Annex-B 文件，通过 RTP over RTSP/TCP 发送；客户端解包并保存 `received.h264`。按文件中的解码顺序每 40 ms 发送一个访问单元，允许包含 B 帧。本步先完成文件传输闭环，不处理真实 PTS/DTS 和实时显示同步。
 
 ## 当前实现与运行
 
@@ -21,15 +21,19 @@
 | `src/rtp/rtp_packet.h/.cpp` | RTP 公共头、CSRC、扩展头、Padding 的解析与生成 |
 | `src/media/h264_packetizer.h/.cpp` | 原始 NALU 转换为单 NALU 或 FU-A 负载 |
 | `src/media/h264_depacketizer.h/.cpp` | 单 NALU、FU-A、STAP-A 解包与连续性检查 |
+| `src/media/h264_file_reader.h/.cpp` | 读取 Annex-B 文件，按 AUD 分组，提取 SPS/PPS |
+| `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 五种请求、状态切换和错误响应 |
 | `src/rtsp/rtsp_client.h/.cpp` | 客户端顺序请求与响应校验 |
 | `src/app/client_main.cpp` | 建立连接，运行完整控制流程 |
-| `src/app/server_main.cpp` | 接待一个客户端，拆消息并调用服务器会话 |
+| `src/app/server_main.cpp` | 单客户端会话循环，处理请求并按 40 ms 调度媒体发送 |
 | `tests/tcp_tests.cpp` | 顺序验证二进制收发、半关闭、资源释放和参数检查 |
 | `tests/rtsp_tests.cpp` | 验证文本消息、消息体、任意半包、粘包和交织帧 |
 | `tests/session_tests.cpp` | 验证 SDP、URL、通道协商、会话状态与错误请求 |
 | `tests/rtp_tests.cpp` | 验证 RTP 固定字节、可选头、截断和字段上限 |
 | `tests/h264_tests.cpp` | 验证 H.264 固定负载、重组恢复和完整内存链路 |
+| `tests/media_file_tests.cpp` | 文件读写、AUD 分组、SDP 参数和截断检查 |
+| `tests/media_integration.ps1` | 双进程文件传输、TEARDOWN、线上 RTP 字段和客户端异常验证 |
 
 构建与测试：
 
@@ -39,17 +43,20 @@ cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-使用 Visual Studio 生成器时，在两个终端依次运行：
+先准备 `samples/sample.h264`，见 [样例准备说明](samples/README.md)。使用 Visual Studio 生成器时，在项目根目录的两个终端依次运行：
 
 ```powershell
 # 终端一：先启动服务器，等待一个客户端。
-.\build\Debug\rtsp_server.exe 8554 127.0.0.1
+.\build\Debug\rtsp_server.exe 8554 127.0.0.1 samples/sample.h264
 
-# 终端二：运行五种请求，TEARDOWN 成功后客户端和服务器均退出。
-.\build\Debug\rtsp_client.exe 127.0.0.1 8554
+# 终端二：接收完整文件，服务器结束发送后双方退出。
+.\build\Debug\rtsp_client.exe 127.0.0.1 8554 received.h264
+
+# 传输结束后播放保存的文件。
+ffplay -f h264 -framerate 25 received.h264
 ```
 
-使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`。服务器接待一次连接后退出，再次测试时需重新启动。客户端不再接受第三个消息参数。
+使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`、输入 `samples/sample.h264`、输出 `received.h264`。服务器接待一次连接后退出，再次测试时需重新启动。客户端第四个参数为接收的访问单元数量上限，默认 `0` 表示接收到 EOF；例如 `rtsp_client.exe 127.0.0.1 8554 partial.h264 25` 在接收约一秒后发送 TEARDOWN。等待 TEARDOWN 响应期间仍处理已经到达的媒体，因此输出可能稍多于上限。
 
 客户端预期输出：
 
@@ -68,15 +75,14 @@ Session: 12345
 Channels: 0/1
 > PLAY rtsp://127.0.0.1:8554/live/, CSeq=4
 < 200 OK
-PLAY succeeded (control flow only; no media in this step).
-> TEARDOWN rtsp://127.0.0.1:8554/live/, CSeq=5
-< 200 OK
+PLAY succeeded; receiving H264.
+Saved received.h264, access units=125
 RTSP session completed.
 ```
 
-上例 Session 仅作示意，实际由服务器生成。服务路径固定为 `/live`，视频轨道为 `/live/trackID=0`。SETUP 前收到交织帧，或收到未协商通道的帧，会报错并关闭连接；程序入口目前仍跳过已协商通道的帧，第六步再接入已经实现的 RTP / H.264 模块。RTCP 仍只分流。
+上例 Session 和访问单元数量仅作示意。服务路径固定为 `/live`，视频轨道为 `/live/trackID=0`。客户端按协商通道分流，RTP 进入 H.264 解包器，RTCP 仍只分流跳过；SETUP 前的交织帧、未知通道、错误 PT、序号不连续或 SSRC 改变都会报错。文件结束由服务器关闭发送方向通知，客户端检查 TCP 解析器、未完成 FU-A 和最后一个 Marker 后关闭输出文件。
 
-本阶段只需要 C++17 编译器、CMake 和 Windows Socket，不依赖 FFmpeg。测试使用本机回环连接、系统自动分配的端口，以及包含零字节的约 2 MiB 数据。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
+程序构建只需要 C++17 编译器、CMake 和 Windows Socket，不链接 FFmpeg。FFmpeg/ffplay 只用于准备真实视频和外部解码验收；CTest 不依赖它们，有 PowerShell 时会自动注册双进程集成测试。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
 
 ### 从这里阅读代码
 
@@ -108,7 +114,7 @@ request.set_header("CSeq", "1");
 std::string wire = rtsp::serialize_rtsp_message(request);
 connection.send_all(wire.data(), wire.size());
 
-// 实际五步流程已封装在 RtspClient::run 中；每次响应都通过流解析器读取。
+// 完整控制与媒体接收流程封装在 RtspClient::run 中。
 connection.close();
 ```
 
@@ -173,7 +179,7 @@ while (parser.next(item)) {
 - 客户端保存 SETUP 响应中的通道号和 Session，后续 PLAY、TEARDOWN 携带该 Session；允许剥离 `Session` 后的 `;timeout=...` 参数。
 - URL 采用常用 `rtsp://host[:port]/path` 形式；不支持认证、IPv6 URL、重定向或跨主机建立新连接。control 不支持 `.` / `..` 路径段；示例轨道与会话使用同一服务器。
 - 客户端要求 SDP 响应的 Content-Type 为 `application/sdp`；服务器仅处理简单的 Accept 值，不实现完整媒体类型协商。
-- 暂不实现超时保活、认证、PAUSE、任意位置 seek、媒体发送及播放同步。服务器不宣称支持 Session timeout；接入媒体文件时再补 SPS/PPS。
+- 暂不实现超时保活、认证、PAUSE、任意位置 seek 及播放同步。服务器不宣称支持 Session timeout；第六步已接入媒体和 SPS/PPS。
 
 ### 第五步：内存中的 RTP 与 H.264
 
@@ -215,7 +221,7 @@ for (std::size_t i = 0; i < payloads.size(); ++i) {
     // Waiting / Dropped 时 nalus 为空；Complete 时 nalus 含完整 NALU。
     // 此例最后一次返回 H264Complete，nalus[0] 与 original 完全一致。
     if (result == rtsp::H264Complete) {
-        // 后续第六步将这些 NALU 添加起始码并写入文件。
+        // H264FileWriter 给这些 NALU 添加起始码并写入文件。
     }
 }
 ```
@@ -232,7 +238,26 @@ for (std::size_t i = 0; i < payloads.size(); ++i) {
 - 封包器只拆分媒体负载，不维护 RTP 时钟或图像边界。外层为每包递增序号，同一图像保持时间戳一致，只有整幅图像最后一个包置 Marker。FU-A 的 E 位只表示 NALU 结束，解包器不依赖 Marker 判断是否收全。
 - TCP 交织通道和 RTP 的 payload type 是两种不同字段。第六步接入时应先按协商通道分流 RTP / RTCP，再检查 RTP 的 PT，随后交给对应媒体解包器。
 
-新增测试为 `rtp_tests` 与 `h264_tests`，已注册至 CTest。本步不依赖媒体文件或 FFmpeg，程序仍只运行第四步的控制流程。
+第五步测试为 `rtp_tests` 与 `h264_tests`，已注册至 CTest，单独验证时不依赖媒体文件或 FFmpeg。
+
+### 第六步：文件传输闭环
+
+详细架构、接口、阅读顺序和边界见 [第六步实现说明](tip6.md)。只新增 `H264FileReader`、`H264FileWriter` 和普通结构体 `H264AccessUnit`，不引入继承、回调、多线程或 FFmpeg 库。
+
+```text
+文件 → H264FileReader（AUD 分组）→ 40 ms 调度 → H264Packetizer
+     → RTP 头 → TCP 交织帧 → Socket
+Socket → RtspStreamParser → RTP/RTCP 分流 → RTP 解析
+       → H264Depacketizer → H264FileWriter → received.h264
+```
+
+输入约定：小于等于 64 MiB 的短样例、每条 NALU 不超过 4 MiB、每个访问单元带 AUD、包含 SPS/PPS、建议开头为 IDR。读取器启动时一次读入并检查文件，以简化跨块边界与流式缓存。它不解析 slice header，也不验证真实帧率；每个访问单元的 AUD 必须由输入保证。
+
+发送端保持文件顺序，按绝对计划时刻推进：下一次发送时刻增加 40 ms，而不是每次处理完再睡 40 ms。`wait_readable()` 在两次发送之间等待请求，保证仍能处理 TEARDOWN。一个访问单元可能包含多个 NALU 和多个 RTP 包；同一单元时间戳一致，只有最后一个包置 Marker。
+
+**B 帧的边界：** 当前 RTP 时间戳按发送序号每幅图像增加 3600，仅作为文件闭环实验的占位时间，不代表含 B 帧视频的真实显示时间。客户端不按时间戳排序，只保存还原的编码数据，由外部解码器恢复显示顺序。真实 PTS/DTS、标准实时播放同步留到后续互通阶段。
+
+EOF 可以发现半条交织帧、未完成 FU-A 和缺少末尾 Marker，但无法发现“恰好在完整图像边界提前结束”的源文件截短；本阶段通过输入/输出 NALU 或解码校验验证完整性，不声称仅凭 EOF 就能证明收到所有图像。
 
 ### TCP 接口约定
 
@@ -241,8 +266,8 @@ for (std::size_t i = 0; i < payloads.size(); ++i) {
 - 已打开的对象必须先 `close()` 才能再次 `connect()` 或 `listen()`。`is_open()` 只检查本地是否持有句柄，不判断对端是否在线。
 - `send_all()` 循环发送，直到全部字节已交给系统，错误通过异常报告。发送完成不等于对端业务已经处理完成。
 - `receive()` 返回实际收到的字节数，返回 `0` 表示对端正常关闭发送方向；缓冲区不能为空。一次读取可能只有部分数据。
-- `shutdown_send()` 只关闭发送方向，可以继续接收；保留此接口供 TCP 测试使用。当前 RTSP 程序通过 TEARDOWN 结束会话，不再靠半关闭结束控制流程。
-- 当前采用阻塞式调用，连接或收发期间会等待；媒体接入阶段再添加调度循环。
+- `shutdown_send()` 只关闭发送方向，可以继续接收；服务器在文件发送结束时用它通知 EOF，随后关闭连接。客户端主动提前结束时仍使用 TEARDOWN。
+- `wait_readable(timeout_ms)` 通过 `select()` 等待数据或 EOF，超时返回 false；不消费字节。连接、发送和实际接收仍是阻塞式调用，慢客户端可能阻塞 `send_all()`，本步不实现异步背压。
 
 ## 1. 第一版目标
 
@@ -354,20 +379,20 @@ RTSP 消息进入会话处理，RTCP 消息进入单独分支，不交给 H.264/
 
 ## 6. 分阶段实现与验收
 
-下表沿用最初架构文档的六阶段编号；实施路线“第三步”对应表中的第 2 阶段，“第四步”对应第 3 阶段。当前已完成第 3 阶段，以及第 4 阶段中的 RTP / H.264 内存处理；文件收发尚未接入。
+下表沿用最初架构文档的六阶段编号；实施路线“第三步”对应表中的第 2 阶段，“第四步”对应第 3 阶段，“第五、六步”完成表中的第 4 阶段。目前已完成自制客户端与服务器之间的视频文件传输闭环。
 
 | 阶段 | 实现内容 | 完成标准 |
 | --- | --- | --- |
 | 1（已实现） | CMake、两个入口、TCP连接与收发 | 客户端能连接服务器，双方能传递字节 |
 | 2（已实现） | RTSP消息解析、序列化、TCP缓冲拆分 | 能处理半条消息、连续多条消息、带消息体的响应 |
 | 3（已实现） | OPTIONS / DESCRIBE / SETUP / PLAY / TEARDOWN、SDP | 完成一次会话，获得轨道参数、Session和通道号 |
-| 4（部分完成） | 已实现交织帧、RTP头、H.264封包解包；待接入文件收发 | 客户端保存的 `received.h264` 能被 ffplay 播放 |
+| 4（已实现） | 交织帧、RTP 头、H.264 封包解包与文件收发 | 客户端保存的 `received.h264` 能被外部解码器解码 |
 | 5 | 与外部工具互通 | ffplay能播放自制服务器；自制客户端能接收已知H.264 RTSP流 |
 | 6 | AAC、基本RTCP、保活与异常退出 | 能接收音频，正确处理断开与超时 |
 
 第4阶段先实现单 NALU、FU-A，再补 STAP-A。服务器暂时可以不发送 STAP-A，客户端补齐后可兼容更多流。
 
-建议视频样例使用 **25 fps、无 B 帧的 H.264 Annex-B 文件**。发送时以一个访问单元（可先理解为一幅编码图像）为单位推进时间：同一图像的所有 RTP 包使用相同时间戳，最后一个包的 Marker 为 1；下一幅图像的时间戳增加 `90000 / 25 = 3600`。一个图像可能包含多个 NALU，不能把每个 NALU 都当成一帧。
+当前样例使用 **带 AUD、包含 SPS/PPS 的 H.264 Annex-B 文件，允许 B 帧，固定按 25 fps 发送**。每个访问单元共用时间戳、最后一个包的 Marker 为 1；每发送一个访问单元时间戳增加 3600 是当前实验的简化，并不还原 B 帧的真实 PTS。一个图像可能包含多个 NALU，不能把每个 NALU 都当成一帧。
 
 完成视频收包后可验证：
 

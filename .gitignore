@@ -2,3 +2,5 @@
 /build-*/
 /.verify/
 /.vs/
+/samples/*.h264
+/received.h264

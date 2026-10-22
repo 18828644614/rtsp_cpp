@@ -32,6 +32,8 @@ public:
     void send_all(const char* data, std::size_t size);
     std::size_t receive(char* buffer, std::size_t capacity);
 
+    bool wait_readable(int timeout_ms);
+
     // 结束本端发送，但仍可接收对端数据。
     void shutdown_send();
 

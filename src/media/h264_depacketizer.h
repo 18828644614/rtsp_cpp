@@ -17,6 +17,7 @@ public:
     // 单 NALU / STAP-A 立即输出，FU-A 只在结束片到达后输出。
     H264DepacketizeResult push(const RtpPacket& packet, std::vector<std::string>& nalus);
     void reset();
+    void finish() const;
 
 private:
     H264DepacketizeResult push_fu_a(const RtpPacket& packet, std::vector<std::string>& nalus);

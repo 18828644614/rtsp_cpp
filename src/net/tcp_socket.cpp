@@ -147,6 +147,28 @@ std::size_t TcpSocket::receive(char* buffer, std::size_t capacity) {
     }
 }
 
+bool TcpSocket::wait_readable(int timeout_ms) {
+    if (!is_open() || timeout_ms < 0) {
+        throw std::invalid_argument("wait_readable requires an open socket and nonnegative timeout");
+    }
+    for (;;) {
+        fd_set sockets;
+        FD_ZERO(&sockets);
+        FD_SET(handle_, &sockets);
+        timeval timeout{};
+        timeout.tv_sec = timeout_ms / 1000;
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
+        const int result = ::select(0, &sockets, nullptr, nullptr, &timeout);
+        if (result != SOCKET_ERROR) {
+            return result > 0;
+        }
+        const int error = WSAGetLastError();
+        if (error != WSAEINTR) {
+            detail::throw_socket_error("select", error);
+        }
+    }
+}
+
 void TcpSocket::shutdown_send() {
     if (!is_open()) {
         throw std::logic_error("socket is closed");

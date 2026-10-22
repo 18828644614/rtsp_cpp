@@ -59,6 +59,12 @@ void test_transfer() {
     client.connect("127.0.0.1", port);
     TcpSocket peer;
     listener.accept_client(peer);
+    check(!peer.wait_readable(0), "empty socket reported readable");
+    check(!peer.wait_readable(5), "read wait did not time out");
+    client.send_all("!", 1);
+    check(peer.wait_readable(500), "read wait missed data");
+    char ready_byte = 0;
+    check(peer.receive(&ready_byte, 1) == 1 && ready_byte == '!', "read wait consumed data");
 
     std::string payload(2 * 1024 * 1024 + 37, '\0');
     for (std::size_t i = 0; i < payload.size(); ++i) {
@@ -98,6 +104,7 @@ void test_transfer() {
 
     client.send_all(nullptr, 0);  // 空发送是合法的空操作。
     client.shutdown_send();
+    check(peer.wait_readable(500), "read wait missed EOF");
     check(peer.receive(server_buffer, sizeof(server_buffer)) == 0, "server missed EOF");
 
     // 客户端结束发送后仍能收到回复，证明关闭的只是一个方向。

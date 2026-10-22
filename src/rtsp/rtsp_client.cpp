@@ -21,14 +21,7 @@ RtspMessage RtspClient::exchange(RtspMessage request) {
         // 先消费缓冲里的项，不能假定一次 receive 就是一条完整响应。
         while (parser_.next(item)) {
             if (item.is_interleaved) {
-                if (session_id_.empty()) {
-                    throw std::runtime_error("unexpected interleaved frame before SETUP");
-                }
-                if (item.channel != static_cast<unsigned int>(transport_.rtp_channel)
-                    && item.channel != static_cast<unsigned int>(transport_.rtcp_channel)) {
-                    throw std::runtime_error("frame arrived on an unnegotiated channel");
-                }
-                // 第六步在这里接入 RTP / H.264 收包；RTCP 仍单独分流。
+                handle_interleaved(item);
                 continue;
             }
             const RtspMessage& response = item.message;
@@ -61,7 +54,69 @@ void RtspClient::check_session(const RtspMessage& response) const {
     }
 }
 
-void RtspClient::run(const std::string& url) {
+void RtspClient::handle_interleaved(const RtspStreamItem& item) {
+    if (session_id_.empty()) {
+        throw std::runtime_error("unexpected interleaved frame before SETUP");
+    }
+    if (item.channel == static_cast<unsigned int>(transport_.rtcp_channel)) {
+        return;
+    }
+    if (item.channel != static_cast<unsigned int>(transport_.rtp_channel)) {
+        throw std::runtime_error("frame arrived on an unnegotiated channel");
+    }
+    const RtpPacket packet = parse_rtp_packet(item.payload);
+    if (packet.payload_type != static_cast<unsigned int>(description_.video.payload_type)) {
+        throw std::runtime_error("RTP payload type does not match SDP");
+    }
+    if (received_packet_ && (packet.sequence_number != next_sequence_ || packet.ssrc != ssrc_)) {
+        throw std::runtime_error("RTP sequence gap or changed SSRC");
+    }
+    received_packet_ = true;
+    next_sequence_ = static_cast<std::uint16_t>(packet.sequence_number + 1);
+    ssrc_ = packet.ssrc;
+    std::vector<std::string> nalus;
+    const H264DepacketizeResult result = depacketizer_.push(packet, nalus);
+    if (result == H264Dropped) {
+        throw std::runtime_error("incomplete H264 NALU was dropped");
+    }
+    for (std::size_t index = 0; index < nalus.size(); ++index) {
+        writer_.write(nalus[index]);
+    }
+    frame_complete_ = packet.marker;
+    if (packet.marker) {
+        depacketizer_.finish();
+        ++received_frames_;
+    }
+}
+
+void RtspClient::receive_media(unsigned int frame_limit) {
+    char buffer[4096];
+    RtspStreamItem item;
+    for (;;) {
+        while (parser_.next(item)) {
+            if (!item.is_interleaved) {
+                throw std::runtime_error("unexpected RTSP message during media reception");
+            }
+            handle_interleaved(item);
+            if (frame_limit != 0 && received_frames_ >= frame_limit && frame_complete_) {
+                return;
+            }
+        }
+        const std::size_t count = connection_.receive(buffer, sizeof(buffer));
+        if (count == 0) {
+            parser_.finish();
+            depacketizer_.finish();
+            if (!received_packet_ || !frame_complete_) {
+                throw std::runtime_error("stream ended before a complete H264 access unit");
+            }
+            return;
+        }
+        parser_.append(buffer, count);
+    }
+}
+
+void RtspClient::run(const std::string& url, const std::string& output_path,
+                     unsigned int frame_limit) {
     if (next_cseq_ != 1) {
         throw std::runtime_error("create a new client object for another session");
     }
@@ -119,20 +174,24 @@ void RtspClient::run(const std::string& url) {
               << "\nSession: " << session_id_ << "\nChannels: " << transport_.rtp_channel
               << '/' << transport_.rtcp_channel << '\n';
 
-    // 4. 对聚合 URL 发 PLAY，后续请求必须携带 SETUP 返回的 Session。
+    writer_.open(output_path);
     RtspMessage play;
     play.method = "PLAY";
     play.uri = aggregate_url;
     play.set_header("Session", session_id_);
     check_session(exchange(play));
-    std::cout << "PLAY succeeded (control flow only; no media in this step).\n";
+    std::cout << "PLAY succeeded; receiving H264.\n";
+    receive_media(frame_limit);
 
-    // 5. 本步没有媒体接收循环，直接请求结束会话。
-    RtspMessage teardown;
-    teardown.method = "TEARDOWN";
-    teardown.uri = aggregate_url;
-    teardown.set_header("Session", session_id_);
-    check_session(exchange(teardown));
+    if (frame_limit != 0 && received_frames_ >= frame_limit) {
+        RtspMessage teardown;
+        teardown.method = "TEARDOWN";
+        teardown.uri = aggregate_url;
+        teardown.set_header("Session", session_id_);
+        check_session(exchange(teardown));
+    }
+    writer_.close();
+    std::cout << "Saved " << output_path << ", access units=" << received_frames_ << '\n';
 }
 
 SessionDescription RtspClient::description() const {

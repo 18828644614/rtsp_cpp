@@ -58,6 +58,12 @@ void H264Depacketizer::reset() {
     nal_header_ = 0;
 }
 
+void H264Depacketizer::finish() const {
+    if (assembling_) {
+        throw std::runtime_error("stream ended inside an H264 FU-A NALU");
+    }
+}
+
 H264DepacketizeResult H264Depacketizer::push(const RtpPacket& packet,
                                             std::vector<std::string>& nalus) {
     nalus.clear();

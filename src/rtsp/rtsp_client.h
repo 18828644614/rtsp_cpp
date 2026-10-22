@@ -1,6 +1,8 @@
 #pragma once
 
 #include "net/tcp_socket.h"
+#include "media/h264_depacketizer.h"
+#include "media/h264_file_writer.h"
 #include "rtsp/rtsp_session_utils.h"
 #include "rtsp/rtsp_stream_parser.h"
 #include "sdp/session_description.h"
@@ -11,8 +13,8 @@ class RtspClient {
 public:
     explicit RtspClient(net::TcpSocket& connection);
 
-    // 在已经连接的 Socket 上顺序完成五种请求，不在每次请求后关闭连接。
-    void run(const std::string& url);
+    void run(const std::string& url, const std::string& output_path = "received.h264",
+             unsigned int frame_limit = 0);
 
     SessionDescription description() const;
     TcpTransport transport() const;
@@ -21,6 +23,8 @@ public:
 private:
     RtspMessage exchange(RtspMessage request);
     void check_session(const RtspMessage& response) const;
+    void handle_interleaved(const RtspStreamItem& item);
+    void receive_media(unsigned int frame_limit);
 
     // 引用只借用入口程序的 Socket，Socket 的生命周期仍由入口程序管理。
     net::TcpSocket& connection_;
@@ -29,6 +33,13 @@ private:
     std::string session_id_;
     SessionDescription description_;
     TcpTransport transport_;
+    H264FileWriter writer_;
+    H264Depacketizer depacketizer_;
+    bool received_packet_ = false;
+    bool frame_complete_ = false;
+    std::uint16_t next_sequence_ = 0;
+    std::uint32_t ssrc_ = 0;
+    unsigned int received_frames_ = 0;
 };
 
 }  // namespace rtsp

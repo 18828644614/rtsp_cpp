@@ -18,7 +18,8 @@ struct SessionDescription {
     MediaTrack video;
 };
 
-// 生成单路 H.264 的 SDP。此步尚未读取媒体，SPS/PPS 在接入文件后补齐。
+std::string make_h264_fmtp(const std::string& sps, const std::string& pps);
+
 std::string make_sdp(const SessionDescription& description);
 
 // 只支持单路 video / RTP/AVP / H264，格式非法或不支持时抛出异常。

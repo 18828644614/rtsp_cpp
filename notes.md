@@ -1,5 +1,15 @@
 # 实现记录
 
+## 第六步：H.264 文件与视频收发
+
+- 保留普通结构体、函数和顺序循环；只新增 H264FileReader、H264FileWriter 和 H264AccessUnit。
+- 文件一次读入，限制 64 MiB；按 AUD 组织图像，兼容三/四字节起始码，提取首组 SPS/PPS 生成 SDP。
+- 服务器使用 select 可读等待与 steady_clock 绝对计划时刻交替处理控制请求和媒体，每 40 ms 发送一个访问单元。
+- 客户端等待响应和持续收媒体共用交织帧处理逻辑；正常 EOF 检查半包、未完成 FU-A 和最后一个 Marker；提前结束仍发 TEARDOWN。
+- 允许 I/P/B，保持解码顺序；按发送序号生成占位 RTP 时间戳，不宣称已经实现真实 PTS/DTS 或标准实时显示同步。
+- CMake/MSVC Debug 和 Release 构建成功，各七组 CTest 全部通过，Debug 集成测试额外连续三轮通过。实际含 30 个 B 帧的 50 帧视频传输后，FFmpeg 解码的逐帧 MD5 与原文件一致。
+- 本次工具问题：PowerShell 包装脚本无法正确传递多行补丁，改用原生 apply_patch 工具；服务器首次构建缺少 rtp_packet.h，已补齐。补丁模板的转义与一次文档匹配错误均在写入前被拒绝，随后分开提交成功。
+
 ## 第五步：RTP 与 H.264 内存处理
 
 - 新增三个模块：RtpPacket（普通结构体及解析/生成函数）、H264Packetizer（无状态封包）、H264Depacketizer（单路分片状态）。

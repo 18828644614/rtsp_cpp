@@ -23,6 +23,8 @@ add_library(rtsp_core STATIC
     src/rtp/rtp_packet.cpp
     src/media/h264_packetizer.cpp
     src/media/h264_depacketizer.cpp
+    src/media/h264_file_reader.cpp
+    src/media/h264_file_writer.cpp
 )
 target_include_directories(rtsp_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(rtsp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0600)
@@ -61,6 +63,22 @@ if(BUILD_TESTING)
     target_link_libraries(h264_tests PRIVATE rtsp_core)
     add_test(NAME h264_tests COMMAND h264_tests)
     set_tests_properties(h264_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(media_file_tests tests/media_file_tests.cpp)
+    target_link_libraries(media_file_tests PRIVATE rtsp_core)
+    add_test(NAME media_file_tests COMMAND media_file_tests)
+    set_tests_properties(media_file_tests PROPERTIES TIMEOUT 20)
+
+    find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)
+    if(POWERSHELL_EXECUTABLE)
+        add_test(NAME media_integration COMMAND "${POWERSHELL_EXECUTABLE}"
+            -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/media_integration.ps1"
+            -ServerPath "$<TARGET_FILE:rtsp_server>"
+            -ClientPath "$<TARGET_FILE:rtsp_client>"
+            -WorkDirectory "${CMAKE_CURRENT_BINARY_DIR}/media_integration")
+        set_tests_properties(media_integration PROPERTIES TIMEOUT 45)
+    endif()
 endif()
 
 # /utf-8 使 MSVC 正确读取中文注释；两种编译器均开启常用警告。
