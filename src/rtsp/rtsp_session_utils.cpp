@@ -49,7 +49,9 @@ std::string url_origin(const std::string& url) {
         || url.find_first_of(" \t\r\n#") != std::string::npos) {
         throw std::runtime_error("expected an absolute RTSP URL");
     }
+    //从下标7开始寻找第一个 / 或 ?
     const std::size_t end = url.find_first_of("/?", 7);
+    //找到end,截取end-7个字节，没有找到，截取到末尾
     const std::string authority = url.substr(7, end == std::string::npos
                                                  ? std::string::npos : end - 7);
     if (authority.empty() || authority.find_first_of("@[]\\") != std::string::npos) {
@@ -127,11 +129,17 @@ std::string session_id_from_header(const std::string& text) {
     return trim(text.substr(0, text.find(';')));
 }
 
+// rtsp://127.0.0.1:8554/live/trackID=0
+// └────── origin ─────┘└---─ path --─┘
+
+// origin = "rtsp://127.0.0.1:8554"
+// path   = "/live/trackID=0"
 std::string rtsp_url_path(const std::string& url) {
     const std::string origin = url_origin(url);
     if (url.size() == origin.size()) {
         return "/";
     }
+    //从origin开始截取到末尾
     return url.substr(origin.size());
 }
 

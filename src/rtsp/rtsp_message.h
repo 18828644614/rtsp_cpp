@@ -42,6 +42,7 @@ struct RtspMessage {
 bool parse_rtsp_message(const std::string& data, RtspMessage& message,
                         std::size_t& consumed);
 
+// 封装一个rtsp消息
 // 自动按 body 的实际字节数生成 Content-Length，不相信手工填写的长度。
 std::string serialize_rtsp_message(const RtspMessage& message);
 

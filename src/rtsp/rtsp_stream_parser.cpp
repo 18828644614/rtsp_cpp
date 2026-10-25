@@ -25,6 +25,7 @@ bool RtspStreamParser::next(RtspStreamItem& item) {
 
     RtspStreamItem parsed;
     std::size_t consumed = 0;
+    //tcp 交织头
     if (buffer_[0] == '$') {
         // 只看当前消息起点，不在二进制负载里搜索 '$'。
         if (buffer_.size() < 4) {
@@ -41,6 +42,7 @@ bool RtspStreamParser::next(RtspStreamItem& item) {
         parsed.payload = buffer_.substr(4, payload_size);
         consumed = 4 + payload_size;
     } else {
+        //rstp 消息
         if (!parse_rtsp_message(buffer_, parsed.message, consumed)) {
             return false;
         }

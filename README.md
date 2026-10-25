@@ -2,7 +2,7 @@
 
 这是一个面向新手的协议学习项目：自己实现 RTSP 会话控制、RTP 收发，以及 H.264 / AAC 的封包和解包。
 
-当前已完成实施路线的 **第 1～6 步**。服务器读取带 AUD 的 H.264 Annex-B 文件，通过 RTP over RTSP/TCP 发送；客户端解包并保存 `received.h264`。按文件中的解码顺序每 40 ms 发送一个访问单元，允许包含 B 帧。本步先完成文件传输闭环，不处理真实 PTS/DTS 和实时显示同步。
+当前已完成实施路线的 **第 1～6 步**，并完成演进路线的 **阶段 1：多客户端连接和连接生命周期**。服务器为每个客户端创建独立的 RTSP 会话、H.264 文件读取器和 RTP 状态，通过 RTP over RTSP/TCP 发送；客户端解包并保存 `received.h264`。按文件中的解码顺序每 40 ms 发送一个访问单元，允许包含 B 帧。本步先完成文件传输闭环，不处理真实 PTS/DTS 和实时显示同步。
 
 ## 当前实现与运行
 
@@ -24,16 +24,18 @@
 | `src/media/h264_file_reader.h/.cpp` | 读取 Annex-B 文件，按 AUD 分组，提取 SPS/PPS |
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 五种请求、状态切换和错误响应 |
+| `src/rtsp/rtsp_server_connection.h/.cpp` | 一个客户端连接的 Socket、解析器、会话状态和媒体发送线程 |
+| `src/rtsp/rtsp_server.h/.cpp` | 监听、接受连接、回收连接线程和停止服务器 |
 | `src/rtsp/rtsp_client.h/.cpp` | 客户端顺序请求与响应校验 |
 | `src/app/client_main.cpp` | 建立连接，运行完整控制流程 |
-| `src/app/server_main.cpp` | 单客户端会话循环，处理请求并按 40 ms 调度媒体发送 |
+| `src/app/server_main.cpp` | 解析参数并启动多客户端服务器 |
 | `tests/tcp_tests.cpp` | 顺序验证二进制收发、半关闭、资源释放和参数检查 |
 | `tests/rtsp_tests.cpp` | 验证文本消息、消息体、任意半包、粘包和交织帧 |
 | `tests/session_tests.cpp` | 验证 SDP、URL、通道协商、会话状态与错误请求 |
 | `tests/rtp_tests.cpp` | 验证 RTP 固定字节、可选头、截断和字段上限 |
 | `tests/h264_tests.cpp` | 验证 H.264 固定负载、重组恢复和完整内存链路 |
 | `tests/media_file_tests.cpp` | 文件读写、AUD 分组、SDP 参数和截断检查 |
-| `tests/media_integration.ps1` | 双进程文件传输、TEARDOWN、线上 RTP 字段和客户端异常验证 |
+| `tests/media_integration.ps1` | 多客户端文件传输、重连、TEARDOWN、线上 RTP 字段和客户端异常验证 |
 
 构建与测试：
 
@@ -46,17 +48,17 @@ ctest --test-dir build -C Debug --output-on-failure
 先准备 `samples/sample.h264`，见 [样例准备说明](samples/README.md)。使用 Visual Studio 生成器时，在项目根目录的两个终端依次运行：
 
 ```powershell
-# 终端一：先启动服务器，等待一个客户端。
+# 终端一：启动服务器，持续接受多个客户端。
 .\build\Debug\rtsp_server.exe 8554 127.0.0.1 samples/sample.h264
 
-# 终端二：接收完整文件，服务器结束发送后双方退出。
+# 终端二：接收完整文件；发送结束后该客户端退出，服务器继续监听。
 .\build\Debug\rtsp_client.exe 127.0.0.1 8554 received.h264
 
 # 传输结束后播放保存的文件。
 ffplay -f h264 -framerate 25 received.h264
 ```
 
-使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`、输入 `samples/sample.h264`、输出 `received.h264`。服务器接待一次连接后退出，再次测试时需重新启动。客户端第四个参数为接收的访问单元数量上限，默认 `0` 表示接收到 EOF；例如 `rtsp_client.exe 127.0.0.1 8554 partial.h264 25` 在接收约一秒后发送 TEARDOWN。等待 TEARDOWN 响应期间仍处理已经到达的媒体，因此输出可能稍多于上限。
+使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`、输入 `samples/sample.h264`、输出 `received.h264`。服务器会持续监听，并为每个客户端分配独立的 Session ID；停止服务器需要结束 `rtsp_server` 进程。客户端第四个参数为接收的访问单元数量上限，默认 `0` 表示接收到 EOF；例如 `rtsp_client.exe 127.0.0.1 8554 partial.h264 25` 在接收约一秒后发送 TEARDOWN。等待 TEARDOWN 响应期间仍处理已经到达的媒体，因此输出可能稍多于上限。
 
 客户端预期输出：
 
@@ -274,10 +276,10 @@ EOF 可以发现半条交织帧、未完成 FU-A 和缺少末尾 Marker，但无
 - 使用 **C++17 + CMake**，先在 Windows 上运行。
 - 实现两个程序：`rtsp_client` 和 `rtsp_server`。
 - 使用 **RTSP 1.0 + TCP interleaved（交织传输）**。
-- 一个服务器连接一个客户端，先传 H.264 视频，再加入 AAC 音频。
+- 服务器支持多个独立客户端连接，先传 H.264 视频，再加入 AAC 音频。
 - 服务器读取本地媒体文件；客户端解包后保存文件，用 ffplay 验证。
 
-第一版采用阻塞式 Socket、每个连接一个顺序处理循环。后续再扩展 UDP、并发客户端、认证、完整 RTCP 和音视频播放同步。
+当前阶段采用阻塞式 Socket、每个连接一个工作线程和独立顺序处理循环。后续再扩展共享媒体源、UDP、认证、完整 RTCP 和音视频播放同步。
 
 ## 2. 先分清三件事
 

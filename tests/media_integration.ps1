@@ -43,6 +43,13 @@ function Wait-App($Process, [string]$Name) {
     Check ($Process.ExitCode -eq 0) "$Name exit=$($Process.ExitCode): $errorText"
 }
 
+function Stop-App($Process) {
+    if ($null -ne $Process -and -not $Process.HasExited) {
+        $Process.Kill()
+        $Process.WaitForExit()
+    }
+}
+
 function Read-Bytes($Stream, [int]$Count) {
     $bytes = New-Object byte[] $Count
     $offset = 0
@@ -169,23 +176,40 @@ function Test-ClientReception([string]$Case) {
 
 $server = $null
 $client = $null
+$clientA = $null
+$clientB = $null
+$clientC = $null
 $peer = $null
 try {
     $started = Start-TestServer 'server-full'
     $server = $started[0]
-    $outputPath = Join-Path $WorkDirectory 'received.h264'
-    $client = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputPath) 'client-full'
-    Wait-App $client 'client-full'
-    Wait-App $server 'server-full'
-    $receivedBytes = [System.IO.File]::ReadAllBytes($outputPath)
-    Check ([Convert]::ToBase64String($receivedBytes) -eq [Convert]::ToBase64String($inputBytes)) 'full file round trip changed NALUs'
+    $outputA = Join-Path $WorkDirectory 'received-a.h264'
+    $outputB = Join-Path $WorkDirectory 'received-b.h264'
+    $clientA = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputA) 'client-a'
+    $clientB = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputB) 'client-b'
+    Wait-App $clientA 'client-a'
+    Wait-App $clientB 'client-b'
+    foreach ($outputPath in @($outputA, $outputB)) {
+        $receivedBytes = [System.IO.File]::ReadAllBytes($outputPath)
+        Check ([Convert]::ToBase64String($receivedBytes) -eq [Convert]::ToBase64String($inputBytes)) "multi-client transfer changed $outputPath"
+    }
+    $sessionMatches = [regex]::Matches((Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-full.out') -Raw), 'Client connected, Session=(\d+)')
+    $sessionIds = @($sessionMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    Check ($sessionIds.Count -ge 2) 'multi-client server reused or failed to report Session IDs'
+
+    $outputC = Join-Path $WorkDirectory 'received-c.h264'
+    $clientC = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputC) 'client-reconnect'
+    Wait-App $clientC 'client-reconnect'
+    $receivedBytes = [System.IO.File]::ReadAllBytes($outputC)
+    Check ([Convert]::ToBase64String($receivedBytes) -eq [Convert]::ToBase64String($inputBytes)) 'server did not accept a client after disconnects'
+    Stop-App $server
 
     $started = Start-TestServer 'server-stop'
     $server = $started[0]
     $partialPath = Join-Path $WorkDirectory 'partial.h264'
     $client = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $partialPath, '2') 'client-stop'
     Wait-App $client 'client-stop'
-    Wait-App $server 'server-stop'
+    Stop-App $server
     Check ((Get-Item -LiteralPath $partialPath).Length -lt $inputBytes.Length) 'TEARDOWN did not stop media'
     Check ((Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-stop.out') -Raw) -match 'Request: TEARDOWN') 'server did not process TEARDOWN'
 
@@ -224,14 +248,14 @@ try {
     Check ($frameCount -eq 6 -and $packetCount -gt 6 -and $fragmentCount -gt 0) 'marker or FU-A generation failed'
     $peer.Dispose()
     $peer = $null
-    Wait-App $server 'server-wire'
+    Stop-App $server
     foreach ($case in @('mock-valid', 'mock-truncated', 'mock-fu-eof', 'mock-no-marker', 'mock-wrong-pt', 'mock-wrong-channel', 'mock-gap')) {
         Test-ClientReception $case
     }
     Write-Output 'PASS: full transfer, TEARDOWN, SDP, channels, RTP fields and FU-A'
 } finally {
     if ($null -ne $peer) { $peer.Dispose() }
-    foreach ($process in @($client, $server)) {
-        if ($null -ne $process -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+    foreach ($process in @($client, $clientA, $clientB, $clientC, $server)) {
+        Stop-App $process
     }
 }

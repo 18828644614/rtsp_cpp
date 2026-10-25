@@ -20,6 +20,7 @@ public:
     explicit RtspServerSession(const std::string& session_id,
                                const SessionDescription& description = SessionDescription());
 
+    //根据客户端的请求和当前会话状态，决定是否允许操作，更新会话，并生成对应的 RTSP 响应
     RtspMessage handle(const RtspMessage& request);
     RtspSessionState state() const;
     TcpTransport transport() const;

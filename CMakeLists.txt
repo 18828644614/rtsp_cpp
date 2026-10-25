@@ -18,6 +18,8 @@ add_library(rtsp_core STATIC
     src/rtsp/rtsp_stream_parser.cpp
     src/rtsp/rtsp_session_utils.cpp
     src/rtsp/rtsp_server_session.cpp
+    src/rtsp/rtsp_server.cpp
+    src/rtsp/rtsp_server_connection.cpp
     src/rtsp/rtsp_client.cpp
     src/sdp/session_description.cpp
     src/rtp/rtp_packet.cpp

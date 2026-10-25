@@ -45,6 +45,7 @@ RtspServerSession::RtspServerSession(const std::string& session_id,
 }
 
 RtspMessage RtspServerSession::handle(const RtspMessage& request) {
+    //先拒绝错误的消息和重复头字段
     if (!request.is_request || duplicate_header(request, "session")
         || duplicate_header(request, "transport")) {
         return response_for(request, 400, "Bad Request");
@@ -64,11 +65,19 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
         path = "*";
     } else {
         try {
+            //去除资源路径：
+            //例如：
+            // rtsp://127.0.0.1:8554/live/trackID=0
+            // └────── origin ─────┘└---─ path --─┘
+            // path   = "/live/trackID=0"
             path = rtsp_url_path(request.uri);
         } catch (const std::runtime_error&) {
             return response_for(request, 400, "Bad Request");
         }
     }
+
+    //判断请求是整个会话，还是视频轨道：(is_aggregate:整个会话，is_track：视频轨道)
+    //项目写死会话：/live 或 /live/，视频轨道：/live/trackID=0
     const bool is_aggregate = path == "/live" || path == "/live/";
     const bool is_track = path == "/live/trackID=0";
     if (!is_aggregate && !is_track && path != "*") {
@@ -84,7 +93,8 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
     if ((method == "PLAY" || method == "TEARDOWN") && requested_session.empty()) {
         return response_for(request, 454, "Session Not Found");
     }
-
+    
+    //默认创建成功响应
     RtspMessage response = response_for(request, 200, "OK");
     if (method == "OPTIONS") {
         response.set_header("Public", "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN");

@@ -75,6 +75,7 @@ void H264FileReader::open(const std::string& path) {
         if ((header & 0x80) != 0 || type == 0 || type > 23) {
             throw std::runtime_error("unsupported NALU in H264 file");
         }
+        //每一个AUD被当成一个帧
         if (type == 9) {
             if (has_aud) {
                 if (!has_picture) {
@@ -100,11 +101,27 @@ void H264FileReader::open(const std::string& path) {
         }
         frame.nalus.push_back(nalu);
         position = next;
+        //这个有意义，下一个循环，会用 position + prefix_size 判断下一个NALU的头位置
+        //处理最后一个 NALU 时，找不到后续起始码，find_start_code() 会返回：next == data.size();,退出while循环
         prefix_size = next_prefix_size;
     }
     if (!has_aud || !has_picture || sps_.size() < 4 || pps_.empty()) {
         throw std::runtime_error("H264 input requires AUD, pictures, SPS and PPS");
     }
+
+    // AUD A → 收集 A 的数据
+    // AUD B → 保存 A，开始收集 B
+    // AUD C → 保存 B，开始收集 C
+    // 文件结束 → 没有下一个 AUD，需要在循环外保存 C
+
+    // 遇到 AUD：
+    //     如果之前已经有一个访问单元：
+    //         保存之前的访问单元
+    //     开始新的访问单元
+    // 遇到其他 NALU：
+    //     加入当前访问单元
+    // 文件结束：
+    //     保存最后一个访问单元
     frames.push_back(frame);
     frames_ = frames;
 }
