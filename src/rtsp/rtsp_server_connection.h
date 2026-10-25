@@ -1,9 +1,11 @@
 #pragma once
 
+#include "net/outbound_queue.h"
 #include "net/tcp_socket.h"
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -27,11 +29,14 @@ public:
 
 private:
     void run();
+    void send_loop();
 
     net::TcpSocket socket_;
     std::string input_path_;
     std::string session_id_;
+    net::OutboundQueue outbound_queue_;
     std::thread worker_;
+    std::thread sender_;
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> finished_{false};
 };

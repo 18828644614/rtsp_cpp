@@ -2,7 +2,7 @@
 
 这是一个面向新手的协议学习项目：自己实现 RTSP 会话控制、RTP 收发，以及 H.264 / AAC 的封包和解包。
 
-当前已完成实施路线的 **第 1～6 步**，并完成演进路线的 **阶段 1：多客户端连接和连接生命周期**。服务器为每个客户端创建独立的 RTSP 会话、H.264 文件读取器和 RTP 状态，通过 RTP over RTSP/TCP 发送；客户端解包并保存 `received.h264`。按文件中的解码顺序每 40 ms 发送一个访问单元，允许包含 B 帧。本步先完成文件传输闭环，不处理真实 PTS/DTS 和实时显示同步。
+当前已完成实施路线的 **第 1～6 步**，并完成演进路线的 **阶段 1～2**。服务器为每个客户端创建独立的 RTSP 会话、H.264 文件读取器和 RTP 状态，通过每连接独有的有界出站队列和单一发送线程发送 RTP over RTSP/TCP；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。按文件中的解码顺序每 40 ms 发送一个访问单元，允许包含 B 帧。本步先完成文件传输闭环，不处理真实 PTS/DTS 和实时显示同步。
 
 ## 当前实现与运行
 
@@ -13,18 +13,21 @@
 | `CMakeLists.txt` | 构建共用库、客户端、服务器和测试 |
 | `src/net/socket_utils.h/.cpp` | Winsock 初始化、清理和错误报告 |
 | `src/net/tcp_socket.h/.cpp` | 创建连接、监听、接受客户端、收发和关闭 |
+| `src/net/outbound_queue.h/.cpp` | 每连接有界输出队列和关闭同步 |
 | `src/app/command_line.h` | 检查命令行端口参数 |
 | `src/rtsp/rtsp_message.h/.cpp` | 保存、解析和生成 RTSP 请求/响应 |
 | `src/rtsp/rtsp_stream_parser.h/.cpp` | 累积 TCP 字节，拆出文本消息或交织帧 |
 | `src/rtsp/rtsp_session_utils.h/.cpp` | TCP Transport、Session 字段和控制 URL |
 | `src/sdp/session_description.h/.cpp` | 单路 H.264 视频的 SDP 生成与解析 |
 | `src/rtp/rtp_packet.h/.cpp` | RTP 公共头、CSRC、扩展头、Padding 的解析与生成 |
+| `src/rtp/rtp_sender.h/.cpp` | 为单客户端单轨道维护 RTP 状态并投递 RTP |
 | `src/media/h264_packetizer.h/.cpp` | 原始 NALU 转换为单 NALU 或 FU-A 负载 |
 | `src/media/h264_depacketizer.h/.cpp` | 单 NALU、FU-A、STAP-A 解包与连续性检查 |
 | `src/media/h264_file_reader.h/.cpp` | 读取 Annex-B 文件，按 AUD 分组，提取 SPS/PPS |
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 五种请求、状态切换和错误响应 |
 | `src/rtsp/rtsp_server_connection.h/.cpp` | 一个客户端连接的 Socket、解析器、会话状态和媒体发送线程 |
+| `src/rtsp/media_transport.h/.cpp` | TCP interleaved Transport 封装，预留其他传输模式 |
 | `src/rtsp/rtsp_server.h/.cpp` | 监听、接受连接、回收连接线程和停止服务器 |
 | `src/rtsp/rtsp_client.h/.cpp` | 客户端顺序请求与响应校验 |
 | `src/app/client_main.cpp` | 建立连接，运行完整控制流程 |
@@ -35,6 +38,7 @@
 | `tests/rtp_tests.cpp` | 验证 RTP 固定字节、可选头、截断和字段上限 |
 | `tests/h264_tests.cpp` | 验证 H.264 固定负载、重组恢复和完整内存链路 |
 | `tests/media_file_tests.cpp` | 文件读写、AUD 分组、SDP 参数和截断检查 |
+| `tests/outbound_tests.cpp` | 出站队列边界、FIFO 和 RTP Sender 字段验证 |
 | `tests/media_integration.ps1` | 多客户端文件传输、重连、TEARDOWN、线上 RTP 字段和客户端异常验证 |
 
 构建与测试：
@@ -269,7 +273,7 @@ EOF 可以发现半条交织帧、未完成 FU-A 和缺少末尾 Marker，但无
 - `send_all()` 循环发送，直到全部字节已交给系统，错误通过异常报告。发送完成不等于对端业务已经处理完成。
 - `receive()` 返回实际收到的字节数，返回 `0` 表示对端正常关闭发送方向；缓冲区不能为空。一次读取可能只有部分数据。
 - `shutdown_send()` 只关闭发送方向，可以继续接收；服务器在文件发送结束时用它通知 EOF，随后关闭连接。客户端主动提前结束时仍使用 TEARDOWN。
-- `wait_readable(timeout_ms)` 通过 `select()` 等待数据或 EOF，超时返回 false；不消费字节。连接、发送和实际接收仍是阻塞式调用，慢客户端可能阻塞 `send_all()`，本步不实现异步背压。
+- `wait_readable(timeout_ms)` 通过 `select()` 等待数据或 EOF，超时返回 false；不消费字节。连接的接收线程仍使用阻塞式调用，发送由单独线程从有界出站队列取数据；队列满时断开该连接，避免拖住其他客户端。
 
 ## 1. 第一版目标
 

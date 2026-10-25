@@ -14,15 +14,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(rtsp_core STATIC
     src/net/socket_utils.cpp
     src/net/tcp_socket.cpp
+    src/net/outbound_queue.cpp
     src/rtsp/rtsp_message.cpp
     src/rtsp/rtsp_stream_parser.cpp
     src/rtsp/rtsp_session_utils.cpp
     src/rtsp/rtsp_server_session.cpp
     src/rtsp/rtsp_server.cpp
     src/rtsp/rtsp_server_connection.cpp
+    src/rtsp/media_transport.cpp
     src/rtsp/rtsp_client.cpp
     src/sdp/session_description.cpp
     src/rtp/rtp_packet.cpp
+    src/rtp/rtp_sender.cpp
     src/media/h264_packetizer.cpp
     src/media/h264_depacketizer.cpp
     src/media/h264_file_reader.cpp
@@ -60,6 +63,11 @@ if(BUILD_TESTING)
     target_link_libraries(rtp_tests PRIVATE rtsp_core)
     add_test(NAME rtp_tests COMMAND rtp_tests)
     set_tests_properties(rtp_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(outbound_tests tests/outbound_tests.cpp)
+    target_link_libraries(outbound_tests PRIVATE rtsp_core)
+    add_test(NAME outbound_tests COMMAND outbound_tests)
+    set_tests_properties(outbound_tests PROPERTIES TIMEOUT 20)
 
     add_executable(h264_tests tests/h264_tests.cpp)
     target_link_libraries(h264_tests PRIVATE rtsp_core)
