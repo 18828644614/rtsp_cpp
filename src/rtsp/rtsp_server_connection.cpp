@@ -21,6 +21,7 @@ std::atomic<std::uint64_t> next_session_id{1};
 std::atomic<std::uint32_t> next_ssrc{1};
 
 std::string make_session_id() {
+    // 原子的把 next_session_id + 1,返回加之前的旧值(第一次返回1，第二次返回2)
     return std::to_string(next_session_id.fetch_add(1, std::memory_order_relaxed));
 }
 
