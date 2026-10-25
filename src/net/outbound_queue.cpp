@@ -28,6 +28,7 @@ bool OutboundQueue::push(OutboundMessage message) {
 
 bool OutboundQueue::pop(OutboundMessage& message) {
     std::unique_lock<std::mutex> lock(mutex_);
+    // 队列被关闭 或者 消息队列有数据，才会继续
     condition_.wait(lock, [this] { return closed_ || !messages_.empty(); });
     if (messages_.empty()) {
         return false;

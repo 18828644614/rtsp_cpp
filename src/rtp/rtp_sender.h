@@ -10,8 +10,18 @@
 
 namespace rtsp {
 
+// 把一帧 H264 视频数据转换成一个或多个 RTP 包，再封装成 RTSP over TCP 的交织帧，最后放入发送队列。
+// 整体链路： H264AccessUnit  ->  H264Packetizer  ->  H264 RTP payload  ->  RtpPacket  ->  serialize_rtp_packet()  ->  MediaTransport::frame_rtp()
+//  ->  OutboundMessage  ->  OutboundQueue  ->  send_loop()  ->  TcpSocket::send_all()
+
+// H264AccessUnit：
+// 一帧视频
+//   ├── NALU 1
+//   ├── NALU 2
+//   └── NALU 3
 class RtpSender {
 public:
+    // MediaTransport transport: 表示媒体传输方式以及 RTP 使用的通道, MediaTransport 中保存了 RTP 和 RTCP 的通道号
     RtpSender(MediaTransport transport, int payload_type, std::uint16_t sequence,
               std::uint32_t ssrc);
 
@@ -29,6 +39,8 @@ private:
     int payload_type_;
     std::uint16_t sequence_;
     std::uint32_t ssrc_;
+
+    // 负责把 H264 NALU 转换成 RTP 可以承载的负载
     H264Packetizer packetizer_;
 };
 

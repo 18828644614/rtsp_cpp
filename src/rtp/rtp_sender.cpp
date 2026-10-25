@@ -18,18 +18,24 @@ bool RtpSender::send_access_unit(const H264AccessUnit& access_unit, std::uint32_
                                  net::OutboundQueue& queue) {
     for (std::size_t nalu_index = 0; nalu_index < access_unit.nalus.size(); ++nalu_index) {
         const std::vector<std::string> payloads = packetizer_.packetize(access_unit.nalus[nalu_index]);
+        // 遍历当前 NALU 的所有分片，如果当前 NALU 没有分片，循环执行一次，如果当前 NALU 使用 FU-A 拆分，循环执行多次，每次循环都会创建一个 RTP 包
         for (std::size_t fragment = 0; fragment < payloads.size(); ++fragment) {
             RtpPacket packet;
             packet.payload_type = static_cast<unsigned int>(payload_type_);
             packet.sequence_number = sequence_;
             packet.timestamp = timestamp;
             packet.ssrc = ssrc_;
+
+            // 只有整个 access unit 的最后一个 NALU 的最后一个 RTP 分片，Marker 才为 true
             packet.marker = nalu_index + 1 == access_unit.nalus.size()
                             && fragment + 1 == payloads.size();
             packet.payload = payloads[fragment];
 
             net::OutboundMessage message;
             message.kind = net::OutboundKind::Rtp;
+
+            // 序列化RTP包 serialize_rtp_packet(packet): 会把 RtpPacket 转换成实际的二进制 RTP 数据
+            // 添加 TCP interleaved 头 frame_rtp 
             message.wire = transport_.frame_rtp(serialize_rtp_packet(packet));
             if (!queue.push(std::move(message))) {
                 return false;

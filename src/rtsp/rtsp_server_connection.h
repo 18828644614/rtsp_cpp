@@ -29,6 +29,7 @@ public:
 
 private:
     void run();
+    // 它是一个“发送线程”，主要负责把输出队列中的数据发送给客户端
     void send_loop();
 
     net::TcpSocket socket_;

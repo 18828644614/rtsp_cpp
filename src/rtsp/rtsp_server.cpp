@@ -28,6 +28,7 @@ void RtspServer::run() {
 
     try {
         while (!stopping_.load(std::memory_order_acquire)) {
+            // 删除已经断开的连接
             reap_finished_connections();
             if (!listener_.wait_readable(100)) {
                 continue;
