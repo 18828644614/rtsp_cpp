@@ -36,7 +36,21 @@ void RtspServer::run() {
                 continue;
             }
 
+            // 创建一个新的客户端连接对象，让它使用已经存在的媒体会话，再用 unique_ptr 管理这个连接对象
             auto connection = std::make_unique<RtspServerConnection>(media_session_);
+            //  连接 A
+            //   ├── media_session_ ───────┐
+            //   └── outbound_queue_ → 队列 A
+            //                            │
+            //                            ▼
+            //                     同一个 MediaSession
+            //                            ▲
+            //                            │
+            // 连接 B                     │
+            //   ├── media_session_ ───────┘
+            //   └── outbound_queue_ → 队列 B
+
+            // 从监听 Socket 接收一个客户端连接
             connection->accept_from(listener_);
             std::cout << "Client connected, Session=" << connection->session_id() << std::endl;
             connection->start();
@@ -45,6 +59,7 @@ void RtspServer::run() {
                 if (stopping_.load(std::memory_order_acquire)) {
                     connection->stop();
                 }
+                // 把连接对象的所有权交给服务器的连接容器
                 connections_.push_back(std::move(connection));
             }
         }

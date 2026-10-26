@@ -15,6 +15,7 @@ class MediaSession;
 
 class RtspServerConnection {
 public:
+    // 1.保存共享媒体会话, 2.生成这个连接的会话 ID, 3.创建这个连接自己的发送队列
     explicit RtspServerConnection(std::shared_ptr<MediaSession> media_session);
     ~RtspServerConnection();
 

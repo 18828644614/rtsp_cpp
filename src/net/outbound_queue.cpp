@@ -26,6 +26,9 @@ bool OutboundQueue::push(OutboundMessage message) {
     return true;
 }
 
+// 未关闭	有	取出消息，返回 true
+// 已关闭	有	继续取出剩余消息，返回 true
+// 已关闭	无	没有消息可取，返回 false
 bool OutboundQueue::pop(OutboundMessage& message) {
     std::unique_lock<std::mutex> lock(mutex_);
     // 队列被关闭 或者 消息队列有数据，才会继续

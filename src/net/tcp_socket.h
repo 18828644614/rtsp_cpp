@@ -39,6 +39,8 @@ public:
 
     // 中断收发但保留句柄；多线程连接先中断，join 后再 close，避免句柄读写竞争。
     void shutdown();
+
+    // 给 socket_ 设置 2000 毫秒（2 秒）的发送超时，防止发送操作一直阻塞
     void set_send_timeout(int timeout_ms);
 
     // 查询本地端口，主要用于取得系统自动分配的端口。

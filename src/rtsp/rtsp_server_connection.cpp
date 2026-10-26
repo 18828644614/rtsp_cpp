@@ -65,6 +65,7 @@ void RtspServerConnection::start() {
     socket_.set_send_timeout(2000);
     sender_ = std::thread(&RtspServerConnection::send_loop, this);
     try {
+        // 接收并处理某一个客户端的 RTSP 请求，管理这个客户端的播放订阅，直到连接结束
         worker_ = std::thread(&RtspServerConnection::run, this);
     } catch (...) {
         stop_requested_.store(true, std::memory_order_release);
@@ -155,16 +156,26 @@ void RtspServerConnection::run() {
                 bool response_queued = false;
                 bool commit = true;
                 if (request.method == "PLAY" && response.status_code == 200) {
+                    // 创建媒体订阅 
                     auto candidate = std::make_shared<MediaSubscription>(
                         outbound_queue_, MediaTransport(next_session.transport()),
                         description.video.payload_type, static_cast<std::uint16_t>(100), make_ssrc());
+                    
+                    // candidate	刚创建的客户端订阅
+                    // serialize_rtsp_message(response)	把 PLAY 响应转换成可发送的字符串
+                    // !request.header("Range").empty()	是否要求从头播放
                     const auto result = media_session_->subscribe(
                         candidate, serialize_rtsp_message(response), !request.header("Range").empty());
+
                     if (result == SubscribeResult::Started) {
                         subscription = std::move(candidate);
                         response_queued = true;
                     } else if (result == SubscribeResult::QueueClosed) {
                         throw std::runtime_error("outbound queue is full or closed");
+
+                    // 资源不允许订阅：修改响应，保留原来的状态
+                    // InvalidRange：共享进度已开始，无法满足从头播放	457 Invalid Range
+                    // Ended：媒体资源已结束或正在停止	455 Method Not Valid in This State
                     } else {
                         commit = false;
                         response.status_code = result == SubscribeResult::InvalidRange ? 457 : 455;
@@ -178,6 +189,10 @@ void RtspServerConnection::run() {
                 if (next_session.state() == SessionClosed && subscription) {
                     subscription->cancel();  // 返回后不会再入队 RTP，随后才能入队 TEARDOWN 响应。
                 }
+                
+                // PLAY 订阅成功：前面已经入队，这里跳过。
+                // PLAY 被拒绝：这里把修改后的错误响应入队。
+                // SETUP、TEARDOWN 等其他请求：这里把对应响应入队。
                 if (!response_queued && !outbound_queue_->push(
                         {net::OutboundKind::RtspResponse, serialize_rtsp_message(response)})) {
                     throw std::runtime_error("outbound queue is full or closed");

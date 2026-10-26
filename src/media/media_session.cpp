@@ -107,6 +107,8 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
         subscribers_.pop_back();
         return SubscribeResult::QueueClosed;
     }
+
+    // 媒体线程可能因为没有订阅者而处于等待状态。现在有订阅加入了，就通知它重新检查并继续工作
     condition_.notify_one();
     return SubscribeResult::Started;
 }
@@ -121,6 +123,7 @@ void MediaSession::stop() {
         std::lock_guard<std::mutex> lock(mutex_);
         stopping_ = true;
     }
+    // 通知的是 work_ 线程
     condition_.notify_one();
     if (worker_.joinable()) {
         worker_.join();
@@ -146,12 +149,15 @@ void MediaSession::run() {
     auto next_send = Clock::now();
     try {
         for (;;) {
+            // subscribers_: 成员变量，保存 weak_ptr, 记录会话中的订阅者
+            // subscribers: 局部变量，保存 shared_ptr, 保存本轮要投递的订阅者快照
             std::vector<std::shared_ptr<MediaSubscription>> subscribers;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 // 取消的订阅和已销毁的连接都不再推动媒体进度。
                 auto it = subscribers_.begin();
                 while (it != subscribers_.end()) {
+                    // 从成员表中的一个 weak_ptr，尝试取得临时 shared_ptr
                     auto subscriber = it->lock();
                     if (!subscriber || subscriber->finished()) {
                         it = subscribers_.erase(it);
