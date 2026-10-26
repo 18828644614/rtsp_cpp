@@ -338,6 +338,53 @@ void test_tcp_two_setup_and_media() {
     check_packets(packets, 8, 20, 6, packets[0].rtp.ssrc);
 }
 
+// FFmpeg/ffplay 通过 Range: npt=0.000- 请求 PLAY；晚加入者仍应加入共享进度。
+void test_tcp_zero_range_late_join() {
+    save_samples(12, 0);
+    auto media = std::make_shared<rtsp::MediaSession>(video_path, "");
+    rtsp::net::TcpSocket listener;
+    listener.listen("127.0.0.1", 0);
+
+    rtsp::net::TcpSocket first_socket;
+    first_socket.connect("127.0.0.1", listener.local_port());
+    rtsp::RtspServerConnection first_connection(media);
+    first_connection.accept_from(listener);
+    first_connection.start();
+    rtsp::RtspStreamParser first_parser;
+    check(exchange(first_socket, first_parser, "DESCRIBE", "", 1).status_code == 200,
+          "first DESCRIBE failed");
+    const auto first_setup = exchange(first_socket, first_parser, "SETUP", "/trackID=0", 2,
+        "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
+    check(first_setup.status_code == 200, "first SETUP failed");
+    const std::string first_session = "Session: " + first_setup.header("Session") + "\r\n";
+    check(exchange(first_socket, first_parser, "PLAY", "", 3, first_session).status_code == 200,
+          "first PLAY failed");
+    check(receive_item(first_socket, first_parser).is_interleaved,
+          "first client did not receive media");
+
+    rtsp::net::TcpSocket second_socket;
+    second_socket.connect("127.0.0.1", listener.local_port());
+    rtsp::RtspServerConnection second_connection(media);
+    second_connection.accept_from(listener);
+    second_connection.start();
+    rtsp::RtspStreamParser second_parser;
+    check(exchange(second_socket, second_parser, "DESCRIBE", "", 1).status_code == 200,
+          "second DESCRIBE failed");
+    const auto second_setup = exchange(second_socket, second_parser, "SETUP", "/trackID=0", 2,
+        "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
+    check(second_setup.status_code == 200, "second SETUP failed");
+    const std::string second_session = "Session: " + second_setup.header("Session")
+        + "\r\nRange: npt=0.000-\r\n";
+    check(exchange(second_socket, second_parser, "PLAY", "", 3, second_session).status_code == 200,
+          "zero-start Range rejected for a late client");
+
+    second_connection.stop();
+    second_connection.join();
+    first_connection.stop();
+    first_connection.join();
+    media->stop();
+}
+
 }  // namespace
 
 int main() {
@@ -346,6 +393,7 @@ int main() {
         test_track_selection_and_short_audio();
         test_cancel_and_no_later_idr();
         test_tcp_two_setup_and_media();
+        test_tcp_zero_range_late_join();
         std::remove(video_path.c_str());
         std::remove(audio_path.c_str());
         std::cout << "PASS: TCP two-track SDP/SETUP, independent RTP, shared timeline, late IDR and per-track EOF\n";

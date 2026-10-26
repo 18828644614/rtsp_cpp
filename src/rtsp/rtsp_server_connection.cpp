@@ -166,9 +166,10 @@ void RtspServerConnection::run() {
                     
                     // candidate	刚创建的客户端订阅
                     // serialize_rtsp_message(response)	把 PLAY 响应转换成可发送的字符串
-                    // !request.header("Range").empty()	是否要求从头播放
+                    // RtspServerSession 已经拒绝了非零 seek；ffplay 的 npt=0.000- 是
+                    // “从零开始”的兼容写法，但晚加入客户端仍应加入共享进度。
                     const auto result = media_session_->subscribe(
-                        candidate, serialize_rtsp_message(response), !request.header("Range").empty());
+                        candidate, serialize_rtsp_message(response), false);
 
                     if (result == SubscribeResult::Started) {
                         subscription = std::move(candidate);

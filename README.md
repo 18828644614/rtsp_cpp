@@ -87,7 +87,7 @@ ffplay -f h264 -framerate 25 received.h264
 
 使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`、输入 `samples/sample.h264`、输出 `received.h264`。服务器会持续监听，并为每个客户端分配独立的 Session ID；停止服务器需要结束 `rtsp_server` 进程。客户端第四个参数为接收的访问单元数量上限，默认 `0` 表示接收到 EOF；例如 `rtsp_client.exe 127.0.0.1 8554 partial.h264 25` 在接收约一秒后发送 TEARDOWN。等待 TEARDOWN 响应期间仍处理已经到达的媒体，因此输出可能稍多于上限。
 
-共享播放规则：第一个有效 PLAY 启动播放；中途加入的客户端等到下一个 IDR，从 SPS/PPS 和该 IDR 开始接收，不补发之前的视频。最后一个订阅退出后暂停推进，后续 PLAY 从保留位置继续并等待 IDR。文件结束后资源保持结束状态，新的 PLAY 返回 `455 Method Not Valid in This State`；重新从头播放需要重启服务器。播放开始后请求 `Range: npt=0-` 返回 `457 Invalid Range`，不带 Range 则加入共享进度。若直到 EOF 都没有新的 IDR，等待中的订阅直接结束，服务器记录原因。
+共享播放规则：第一个有效 PLAY 启动播放；中途加入的客户端等到下一个 IDR，从 SPS/PPS 和该 IDR 开始接收，不补发之前的视频。最后一个订阅退出后暂停推进，后续 PLAY 从保留位置继续并等待 IDR。文件结束后资源保持结束状态，新的 PLAY 返回 `455 Method Not Valid in This State`；重新从头播放需要重启服务器。`Range: npt=0-` 和 FFmpeg 常发送的 `Range: npt=0.000-` 都表示零起点，晚加入客户端会加入当前共享进度；非零 Range 返回 `457 Invalid Range`。若直到 EOF 都没有新的 IDR，等待中的订阅直接结束，服务器记录原因。
 
 可以在另一个终端启动第二个客户端观察中途加入：
 
