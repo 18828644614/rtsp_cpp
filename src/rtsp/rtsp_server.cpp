@@ -1,5 +1,6 @@
 #include "rtsp/rtsp_server.h"
 
+#include "media/media_session.h"
 #include "rtsp/rtsp_server_connection.h"
 
 #include <iostream>
@@ -9,7 +10,8 @@
 namespace rtsp {
 
 RtspServer::RtspServer(std::string address, std::uint16_t port, std::string input_path)
-    : address_(std::move(address)), port_(port), input_path_(std::move(input_path)) {}
+    : address_(std::move(address)), port_(port),
+      media_session_(std::make_shared<MediaSession>(input_path)) {}
 
 RtspServer::~RtspServer() {
     stop();
@@ -34,12 +36,15 @@ void RtspServer::run() {
                 continue;
             }
 
-            auto connection = std::make_unique<RtspServerConnection>(input_path_);
+            auto connection = std::make_unique<RtspServerConnection>(media_session_);
             connection->accept_from(listener_);
             std::cout << "Client connected, Session=" << connection->session_id() << std::endl;
             connection->start();
             {
                 std::lock_guard<std::mutex> lock(connections_mutex_);
+                if (stopping_.load(std::memory_order_acquire)) {
+                    connection->stop();
+                }
                 connections_.push_back(std::move(connection));
             }
         }
@@ -47,17 +52,19 @@ void RtspServer::run() {
         if (!stopping_.load(std::memory_order_acquire)) {
             stop_connections();
             listener_.close();
+            media_session_->stop();
             throw;
         }
     }
 
     listener_.close();
     stop_connections();
+    media_session_->stop();
 }
 
 void RtspServer::stop() {
     stopping_.store(true, std::memory_order_release);
-    listener_.close();
+    // 监听线程最多 100 ms 后观察停止标志，再由该线程关闭监听句柄。
     std::lock_guard<std::mutex> lock(connections_mutex_);
     for (std::size_t index = 0; index < connections_.size(); ++index) {
         connections_[index]->stop();

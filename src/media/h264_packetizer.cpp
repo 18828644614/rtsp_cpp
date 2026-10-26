@@ -5,6 +5,21 @@
 
 namespace rtsp {
 
+std::shared_ptr<const H264PayloadUnit> H264Packetizer::packetize_access_unit(
+    std::shared_ptr<const H264AccessUnit> access_unit) const {
+    if (!access_unit || access_unit->nalus.empty()) {
+        throw std::invalid_argument("expected a nonempty H264 access unit");
+    }
+    auto result = std::make_shared<H264PayloadUnit>();
+    result->access_unit = std::move(access_unit);
+    for (const std::string& nalu : result->access_unit->nalus) {
+        for (std::string& payload : packetize(nalu)) {
+            result->payloads.push_back(std::move(payload));
+        }
+    }
+    return result;
+}
+
 std::vector<std::string> H264Packetizer::packetize(const std::string& nalu,
                                                   std::size_t max_payload_size) const {
     //1字节 FU indicator 1字节 FU header 至少 1字节数据 (3字节)

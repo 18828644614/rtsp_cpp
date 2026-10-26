@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)][string]$ServerPath,
     [Parameter(Mandatory = $true)][string]$ClientPath,
     [Parameter(Mandatory = $true)][string]$WorkDirectory
@@ -10,7 +10,11 @@ $WorkDirectory = (Resolve-Path -LiteralPath $WorkDirectory).Path
 $inputPath = Join-Path $WorkDirectory 'input.h264'
 $prefix = [byte[]](0, 0, 0, 1)
 $sample = [System.IO.MemoryStream]::new()
-for ($frame = 0; $frame -lt 6; $frame++) {
+$expected = [System.IO.MemoryStream]::new()
+$expectedFrames = @()
+$frameTotal = 20
+for ($frame = 0; $frame -lt $frameTotal; $frame++) {
+    $frameStart = $sample.Length
     $sample.Write($prefix, 0, 4)
     $sample.Write([byte[]](0x09, 0xf0), 0, 2)
     if ($frame -eq 0) {
@@ -20,11 +24,21 @@ for ($frame = 0; $frame -lt 6; $frame++) {
         $sample.Write([byte[]](0x68, 0xee), 0, 2)
     }
     $sample.Write($prefix, 0, 4)
-    $sample.WriteByte(0x65)
+    $sample.WriteByte($(if ($frame % 5 -eq 0) { 0x65 } else { 0x41 }))
     for ($index = 0; $index -lt 4000; $index++) { $sample.WriteByte(0x55 + $frame) }
+    $au = $sample.ToArray()[([int]$frameStart)..([int]$sample.Length - 1)]
+    if ($frame -gt 0 -and $frame % 5 -eq 0) {
+        # 共享源给后续 IDR 补入 SPS/PPS，正常客户端和晚加入客户端看到同一份 AU。
+        $parameters = $prefix + [byte[]](0x67, 0x64, 0, 0x1f) + $prefix + [byte[]](0x68, 0xee)
+        $au = [byte[]]$au[0..5] + $parameters + [byte[]]$au[6..($au.Length - 1)]
+    }
+    $expectedFrames += ,([byte[]]$au)
+    $expected.Write($au, 0, $au.Length)
 }
 $inputBytes = $sample.ToArray()
 $sample.Dispose()
+$expectedBytes = $expected.ToArray()
+$expected.Dispose()
 [System.IO.File]::WriteAllBytes($inputPath, $inputBytes)
 
 function Check($Condition, [string]$Message) {
@@ -186,32 +200,65 @@ try {
     $outputA = Join-Path $WorkDirectory 'received-a.h264'
     $outputB = Join-Path $WorkDirectory 'received-b.h264'
     $clientA = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputA) 'client-a'
+    # 先确定 A 已经 PLAY，再让 B 中途加入。不能要求 B 也收到文件开头。
+    $playing = $false
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $log = Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-full.out') -Raw -ErrorAction SilentlyContinue
+        if ($log -match 'request: PLAY') { $playing = $true; break }
+        Start-Sleep -Milliseconds 5
+    }
+    Check $playing 'first client did not PLAY'
+    Start-Sleep -Milliseconds 80
     $clientB = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputB) 'client-b'
     Wait-App $clientA 'client-a'
     Wait-App $clientB 'client-b'
-    foreach ($outputPath in @($outputA, $outputB)) {
-        $receivedBytes = [System.IO.File]::ReadAllBytes($outputPath)
-        Check ([Convert]::ToBase64String($receivedBytes) -eq [Convert]::ToBase64String($inputBytes)) "multi-client transfer changed $outputPath"
+    $receivedA = [System.IO.File]::ReadAllBytes($outputA)
+    $receivedB = [System.IO.File]::ReadAllBytes($outputB)
+    Check ([Convert]::ToBase64String($receivedA) -eq [Convert]::ToBase64String($expectedBytes)) 'first client did not receive full shared stream'
+    $matchedIdr = $false
+    foreach ($start in @(5, 10, 15)) {
+        $suffix = [System.IO.MemoryStream]::new()
+        for ($frame = $start; $frame -lt $frameTotal; $frame++) {
+            $suffix.Write($expectedFrames[$frame], 0, $expectedFrames[$frame].Length)
+        }
+        if ([Convert]::ToBase64String($receivedB) -eq [Convert]::ToBase64String($suffix.ToArray())) { $matchedIdr = $true }
+        $suffix.Dispose()
     }
+    Check $matchedIdr 'late client did not receive an IDR-aligned suffix with SPS/PPS'
     $sessionMatches = [regex]::Matches((Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-full.out') -Raw), 'Client connected, Session=(\d+)')
     $sessionIds = @($sessionMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
     Check ($sessionIds.Count -ge 2) 'multi-client server reused or failed to report Session IDs'
 
     $outputC = Join-Path $WorkDirectory 'received-c.h264'
     $clientC = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $outputC) 'client-reconnect'
-    Wait-App $clientC 'client-reconnect'
-    $receivedBytes = [System.IO.File]::ReadAllBytes($outputC)
-    Check ([Convert]::ToBase64String($receivedBytes) -eq [Convert]::ToBase64String($inputBytes)) 'server did not accept a client after disconnects'
+    Check ($clientC.WaitForExit(5000)) 'EOF reconnect timed out'
+    $clientC.Refresh()
+    Check ($clientC.ExitCode -eq 1) 'EOF resource unexpectedly restarted'
+    $reconnectError = Get-Content -LiteralPath (Join-Path $WorkDirectory 'client-reconnect.err') -Raw
+    Check ($reconnectError -match '455') 'EOF PLAY did not return an explicit error'
+    Check (-not $server.HasExited) 'server stopped listening after EOF'
     Stop-App $server
 
     $started = Start-TestServer 'server-stop'
     $server = $started[0]
+    $survivorPath = Join-Path $WorkDirectory 'survivor.h264'
+    $clientA = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $survivorPath) 'client-survivor'
+    $playing = $false
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $log = Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-stop.out') -Raw -ErrorAction SilentlyContinue
+        if ($log -match 'request: PLAY') { $playing = $true; break }
+        Start-Sleep -Milliseconds 5
+    }
+    Check $playing 'surviving client did not PLAY'
+    Start-Sleep -Milliseconds 80
     $partialPath = Join-Path $WorkDirectory 'partial.h264'
     $client = Start-App $ClientPath @('127.0.0.1', "$($started[1])", $partialPath, '2') 'client-stop'
     Wait-App $client 'client-stop'
+    Wait-App $clientA 'client-survivor'
+    Check ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($survivorPath)) -eq [Convert]::ToBase64String($expectedBytes)) 'TEARDOWN interrupted another subscriber'
     Stop-App $server
     Check ((Get-Item -LiteralPath $partialPath).Length -lt $inputBytes.Length) 'TEARDOWN did not stop media'
-    Check ((Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-stop.out') -Raw) -match 'Request: TEARDOWN') 'server did not process TEARDOWN'
+    Check ((Get-Content -LiteralPath (Join-Path $WorkDirectory 'server-stop.out') -Raw) -match 'request: TEARDOWN') 'server did not process TEARDOWN'
 
     $started = Start-TestServer 'server-wire'
     $server = $started[0]
@@ -245,14 +292,14 @@ try {
         $sequence++
         $packetCount++
     }
-    Check ($frameCount -eq 6 -and $packetCount -gt 6 -and $fragmentCount -gt 0) 'marker or FU-A generation failed'
+    Check ($frameCount -eq $frameTotal -and $packetCount -gt $frameTotal -and $fragmentCount -gt 0) 'marker or FU-A generation failed'
     $peer.Dispose()
     $peer = $null
     Stop-App $server
     foreach ($case in @('mock-valid', 'mock-truncated', 'mock-fu-eof', 'mock-no-marker', 'mock-wrong-pt', 'mock-wrong-channel', 'mock-gap')) {
         Test-ClientReception $case
     }
-    Write-Output 'PASS: full transfer, TEARDOWN, SDP, channels, RTP fields and FU-A'
+    Write-Output 'PASS: shared progress, late IDR, EOF rejection, TEARDOWN, SDP, channels, RTP fields and FU-A'
 } finally {
     if ($null -ne $peer) { $peer.Dispose() }
     foreach ($process in @($client, $clientA, $clientB, $clientC, $server)) {

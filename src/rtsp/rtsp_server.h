@@ -13,6 +13,7 @@
 namespace rtsp {
 
 class RtspServerConnection;
+class MediaSession;
 
 class RtspServer {
 public:
@@ -34,7 +35,7 @@ private:
 
     std::string address_;
     std::uint16_t port_;
-    std::string input_path_;
+    std::shared_ptr<MediaSession> media_session_;
     net::TcpSocket listener_;
     std::vector<std::unique_ptr<RtspServerConnection>> connections_;
     mutable std::mutex connections_mutex_;

@@ -31,10 +31,12 @@ void test_sender() {
     tcp.rtp_channel = 6;
     tcp.rtcp_channel = 7;
     rtsp::RtpSender sender(rtsp::MediaTransport(tcp), 96, 100, 0x12345678);
-    rtsp::H264AccessUnit access_unit;
-    access_unit.nalus.push_back(std::string("\x65", 1) + std::string(1500, 'x'));
+    auto access_unit = std::make_shared<rtsp::H264AccessUnit>();
+    access_unit->pts = 9000;
+    access_unit->nalus.push_back(std::string("\x65", 1) + std::string(1500, 'x'));
+    const auto unit = rtsp::H264Packetizer().packetize_access_unit(access_unit);
     rtsp::net::OutboundQueue queue(10000);
-    check(sender.send_access_unit(access_unit, 9000, queue), "RTP sender rejected access unit");
+    check(sender.send_payloads(*unit, queue), "RTP sender rejected access unit");
 
     rtsp::net::OutboundMessage first;
     rtsp::net::OutboundMessage second;
@@ -45,7 +47,7 @@ void test_sender() {
     check(parser.next(item) && item.is_interleaved && item.channel == 6,
           "RTP channel was not transported");
     const rtsp::RtpPacket packet = rtsp::parse_rtp_packet(item.payload);
-    check(packet.sequence_number == 100 && packet.timestamp == 9000
+    check(packet.sequence_number == 100 && packet.timestamp == 0
               && packet.ssrc == 0x12345678 && !packet.marker,
           "first RTP header was wrong");
     parser.finish();

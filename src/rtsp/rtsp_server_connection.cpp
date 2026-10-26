@@ -1,6 +1,6 @@
 #include "rtsp/rtsp_server_connection.h"
 
-#include "media/h264_file_reader.h"
+#include "media/media_session.h"
 #include "rtp/rtp_sender.h"
 #include "rtsp/media_transport.h"
 #include "rtsp/rtsp_message.h"
@@ -8,7 +8,6 @@
 #include "rtsp/rtsp_stream_parser.h"
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -35,8 +34,13 @@ std::uint32_t make_ssrc() {
 
 }  // namespace
 
-RtspServerConnection::RtspServerConnection(std::string input_path)
-    : input_path_(std::move(input_path)), session_id_(make_session_id()) {}
+RtspServerConnection::RtspServerConnection(std::shared_ptr<MediaSession> media_session)
+    : media_session_(std::move(media_session)), session_id_(make_session_id()),
+      outbound_queue_(std::make_shared<net::OutboundQueue>()) {
+    if (!media_session_) {
+        throw std::invalid_argument("connection requires a media session");
+    }
+}
 
 RtspServerConnection::~RtspServerConnection() {
     stop();
@@ -57,22 +61,25 @@ void RtspServerConnection::start() {
     if (worker_.joinable()) {
         throw std::logic_error("connection has already started");
     }
+    // 即使 EOF 时队列尚未达到上限，也不能让不读数据的客户端无限占用发送线程。
+    socket_.set_send_timeout(2000);
     sender_ = std::thread(&RtspServerConnection::send_loop, this);
     try {
         worker_ = std::thread(&RtspServerConnection::run, this);
     } catch (...) {
         stop_requested_.store(true, std::memory_order_release);
-        outbound_queue_.close();
-        socket_.close();
+        outbound_queue_->close();
+        socket_.shutdown();
         sender_.join();
+        socket_.close();
         throw;
     }
 }
 
 void RtspServerConnection::stop() {
     stop_requested_.store(true, std::memory_order_release);
-    outbound_queue_.close();
-    socket_.close();
+    outbound_queue_->close();
+    socket_.shutdown();
 }
 
 void RtspServerConnection::join() {
@@ -82,75 +89,40 @@ void RtspServerConnection::join() {
     if (sender_.joinable()) {
         sender_.join();
     }
+    socket_.close();
 }
 
 bool RtspServerConnection::finished() const {
-    return finished_.load(std::memory_order_acquire);
+    return finished_.load(std::memory_order_acquire)
+           && sender_finished_.load(std::memory_order_acquire);
 }
 
 const std::string& RtspServerConnection::session_id() const {
     return session_id_;
 }
 
-// 读取视频文件；
-// 接收客户端发送的 RTSP 请求；
-// 解析 RTSP 消息；
-// 管理 RTSP 会话状态；
-// 生成 RTSP 响应；
-// 生成 RTP 数据；
-// 把待发送数据放入发送队列；
-// 在停止、断开或出错时清理资源。
+// 连接只处理协议与订阅生命周期；读取文件和媒体计时由 MediaSession 统一负责。
 void RtspServerConnection::run() {
+    std::shared_ptr<MediaSubscription> subscription;
     try {
-        H264FileReader reader;
-        reader.open(input_path_);
-
-        // 根据 H264 的 SPS/PPS 生成 SDP 信息
-        // 为后面的 DESCRIBE 响应准备数据
-        SessionDescription description;
-        description.video.fmtp = make_h264_fmtp(reader.sps(), reader.pps());
-
-        // 创建 RTSP 会话和流解析器
+        const SessionDescription& description = media_session_->description();
         RtspServerSession session(session_id_, description);
         RtspStreamParser parser;
-        RtspStreamItem item; // 解析结果的临时保存对象
+        RtspStreamItem item;
         char buffer[4096];
-        std::uint32_t timestamp = 0;
-        std::unique_ptr<RtpSender> rtp_sender;
-        std::size_t sent_frames = 0;
-        std::chrono::steady_clock::time_point next_send;
 
         while (!stop_requested_.load(std::memory_order_acquire)
                && session.state() != SessionClosed) {
-            if (session.state() == SessionPlaying) {
-                const auto now = std::chrono::steady_clock::now();
-                int wait_ms = 0;
-                if (now < next_send) {
-                    wait_ms = static_cast<int>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(next_send - now).count()) + 1;
+            if (subscription && subscription->finished()) {
+                if (subscription->failed()) {
+                    throw std::runtime_error("media subscription failed or outbound queue is full");
                 }
-
-                // Socket 上有客户端数据 或者 等待时间超时，false: 等待超时，发送视频帧
-                if (!socket_.wait_readable(wait_ms)) {
-                    H264AccessUnit frame;
-                    if (!reader.read(frame)) {
-                        std::cout << "Session " << session_id_ << " completed, access units="
-                                  << sent_frames << std::endl;
-                        break;
-                    }
-
-                    // 把 H264 帧封装成 可 tcp 直接发送的 RTP 并放入发送队列
-                    if (!rtp_sender
-                        || !rtp_sender->send_access_unit(frame, timestamp, outbound_queue_)) {
-                        throw std::runtime_error("outbound queue is full or closed");
-                    }
-                    timestamp += 3600;
-                    ++sent_frames;
-                    next_send += std::chrono::milliseconds(40);
-                    continue;
-                }
+                break;
             }
-
+            // 定期检查媒体结束和入队失败，避免一直阻塞在 receive 中。
+            if (!socket_.wait_readable(50)) {
+                continue;
+            }
             const std::size_t count = socket_.receive(buffer, sizeof(buffer));
             if (count == 0) {
                 parser.finish();
@@ -158,7 +130,6 @@ void RtspServerConnection::run() {
             }
             parser.append(buffer, count);
             while (parser.next(item)) {
-                // 是 tcp 数据交织帧 
                 if (item.is_interleaved) {
                     if (session.state() == SessionInit) {
                         throw std::runtime_error("unexpected media frame before SETUP");
@@ -171,28 +142,51 @@ void RtspServerConnection::run() {
                     continue;
                 }
 
-                // rtsp 请求：
                 const RtspMessage& request = item.message;
                 if (!request.is_request) {
                     throw std::runtime_error("server expected an RTSP request");
                 }
                 std::cout << "Session " << session_id_ << " request: " << request.method
                           << ", CSeq=" << request.header("CSeq") << std::endl;
-                const RtspMessage response = session.handle(request);
-                net::OutboundMessage message;
-                message.kind = net::OutboundKind::RtspResponse;
-                message.wire = serialize_rtsp_message(response);
-                if (!outbound_queue_.push(std::move(message))) {
+
+                // 先在副本上校验；订阅失败不能把真实会话留在 Playing 状态。
+                RtspServerSession next_session = session;
+                RtspMessage response = next_session.handle(request);
+                bool response_queued = false;
+                bool commit = true;
+                if (request.method == "PLAY" && response.status_code == 200) {
+                    auto candidate = std::make_shared<MediaSubscription>(
+                        outbound_queue_, MediaTransport(next_session.transport()),
+                        description.video.payload_type, static_cast<std::uint16_t>(100), make_ssrc());
+                    const auto result = media_session_->subscribe(
+                        candidate, serialize_rtsp_message(response), !request.header("Range").empty());
+                    if (result == SubscribeResult::Started) {
+                        subscription = std::move(candidate);
+                        response_queued = true;
+                    } else if (result == SubscribeResult::QueueClosed) {
+                        throw std::runtime_error("outbound queue is full or closed");
+                    } else {
+                        commit = false;
+                        response.status_code = result == SubscribeResult::InvalidRange ? 457 : 455;
+                        response.reason = result == SubscribeResult::InvalidRange
+                            ? "Invalid Range" : "Method Not Valid in This State";
+                        std::cout << "Media PLAY rejected: "
+                                  << (result == SubscribeResult::Ended ? "resource ended" : "shared progress already started")
+                                  << std::endl;
+                    }
+                }
+                if (next_session.state() == SessionClosed && subscription) {
+                    subscription->cancel();  // 返回后不会再入队 RTP，随后才能入队 TEARDOWN 响应。
+                }
+                if (!response_queued && !outbound_queue_->push(
+                        {net::OutboundKind::RtspResponse, serialize_rtsp_message(response)})) {
                     throw std::runtime_error("outbound queue is full or closed");
+                }
+                if (commit) {
+                    session = next_session;
                 }
                 std::cout << "Session " << session_id_ << " response: " << response.status_code
                           << ' ' << response.reason << std::endl;
-                if (request.method == "PLAY" && response.status_code == 200) {
-                    rtp_sender = std::make_unique<RtpSender>(
-                        MediaTransport(session.transport()), description.video.payload_type,
-                        static_cast<std::uint16_t>(100), make_ssrc());
-                    next_send = std::chrono::steady_clock::now();
-                }
                 if (session.state() == SessionClosed) {
                     break;
                 }
@@ -200,14 +194,16 @@ void RtspServerConnection::run() {
         }
     } catch (const std::exception& error) {
         const bool was_stopping = stop_requested_.exchange(true, std::memory_order_acq_rel);
-        outbound_queue_.close();
-        socket_.close();
+        socket_.shutdown();
         if (!was_stopping) {
             std::cerr << "Session " << session_id_ << " error: " << error.what() << '\n';
         }
     }
 
-    outbound_queue_.close();
+    if (subscription) {
+        subscription->cancel();
+    }
+    outbound_queue_->close();
     finished_.store(true, std::memory_order_release);
 }
 
@@ -215,7 +211,7 @@ void RtspServerConnection::send_loop() {
     try {
         net::OutboundMessage message;
         // pop 会阻塞等待，不会导致空转
-        while (outbound_queue_.pop(message)) {
+        while (outbound_queue_->pop(message)) {
             if (stop_requested_.load(std::memory_order_acquire)) {
                 break;
             }
@@ -230,12 +226,14 @@ void RtspServerConnection::send_loop() {
         }
     } catch (const std::exception& error) {
         stop_requested_.store(true, std::memory_order_release);
-        outbound_queue_.close();
+        outbound_queue_->close();
         if (socket_.is_open()) {
             std::cerr << "Session " << session_id_ << " send error: " << error.what() << '\n';
         }
     }
-    socket_.close();
+    // 仅中断收发，不修改句柄。管理线程 join 两个线程后才真正 close。
+    socket_.shutdown();
+    sender_finished_.store(true, std::memory_order_release);
 }
 
 }  // namespace rtsp

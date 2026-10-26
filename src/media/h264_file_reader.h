@@ -1,14 +1,12 @@
 #pragma once
 
+#include "media/h264_access_unit.h"
+
 #include <cstddef>
 #include <string>
 #include <vector>
 
 namespace rtsp {
-
-struct H264AccessUnit {
-    std::vector<std::string> nalus;
-};
 
 // 00 00 00 01 09 f0
 // 00 00 01    67 64 00 1f

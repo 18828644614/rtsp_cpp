@@ -52,16 +52,22 @@ void test_round_trip() {
     writer.open(output_path);
     rtsp::H264AccessUnit frame;
     check(reader.read(frame) && frame.nalus.size() == 5, "multi-slice access unit split");
+    check(frame.is_keyframe && frame.pts == 0 && frame.duration == 3600,
+          "IDR metadata was not populated");
     const std::vector<std::string> first = frame.nalus;
     for (std::size_t index = 0; index < frame.nalus.size(); ++index) {
         writer.write(frame.nalus[index]);
     }
     check(reader.read(frame) && frame.nalus.size() == 2, "final access unit missing");
+    check(!frame.is_keyframe && frame.pts == 3600 && frame.duration == 3600,
+          "non-IDR inherited keyframe flag or timestamp");
     const std::vector<std::string> second = frame.nalus;
     for (std::size_t index = 0; index < frame.nalus.size(); ++index) {
         writer.write(frame.nalus[index]);
     }
     check(!reader.read(frame) && frame.nalus.empty(), "EOF did not clear output");
+    check(!frame.is_keyframe && frame.pts == 0 && frame.duration == 0,
+          "EOF did not clear metadata");
     writer.close();
     writer.close();
     reader.open(output_path);

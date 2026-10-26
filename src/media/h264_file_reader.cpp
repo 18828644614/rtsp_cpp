@@ -82,7 +82,7 @@ void H264FileReader::open(const std::string& path) {
                     throw std::runtime_error("AUD access unit has no picture");
                 }
                 frames.push_back(frame);
-                frame.nalus.clear();
+                frame = H264AccessUnit{};
                 has_picture = false;
             }
             has_aud = true;
@@ -92,6 +92,9 @@ void H264FileReader::open(const std::string& path) {
                 throw std::runtime_error("H264 input requires AUD before every access unit");
             }
             has_picture = true;
+        }
+        if (type == 5) {
+            frame.is_keyframe = true;
         }
         if (type == 7 && sps_.empty()) {
             sps_ = nalu;
@@ -127,11 +130,13 @@ void H264FileReader::open(const std::string& path) {
 }
 
 bool H264FileReader::read(H264AccessUnit& frame) {
-    frame.nalus.clear();
+    frame = H264AccessUnit{};
     if (next_frame_ == frames_.size()) {
         return false;
     }
     frame = frames_[next_frame_];
+    frame.pts = static_cast<std::uint64_t>(next_frame_) * 3600;
+    frame.duration = 3600;
     ++next_frame_;
     return true;
 }

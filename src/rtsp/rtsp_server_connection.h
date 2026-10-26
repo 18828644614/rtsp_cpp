@@ -11,9 +11,11 @@
 
 namespace rtsp {
 
+class MediaSession;
+
 class RtspServerConnection {
 public:
-    explicit RtspServerConnection(std::string input_path);
+    explicit RtspServerConnection(std::shared_ptr<MediaSession> media_session);
     ~RtspServerConnection();
 
     RtspServerConnection(const RtspServerConnection&) = delete;
@@ -33,13 +35,14 @@ private:
     void send_loop();
 
     net::TcpSocket socket_;
-    std::string input_path_;
+    std::shared_ptr<MediaSession> media_session_;
     std::string session_id_;
-    net::OutboundQueue outbound_queue_;
+    std::shared_ptr<net::OutboundQueue> outbound_queue_;
     std::thread worker_;
     std::thread sender_;
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> finished_{false};
+    std::atomic<bool> sender_finished_{false};
 };
 
 }  // namespace rtsp

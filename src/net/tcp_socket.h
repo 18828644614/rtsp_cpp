@@ -37,6 +37,10 @@ public:
     // 结束本端发送，但仍可接收对端数据。
     void shutdown_send();
 
+    // 中断收发但保留句柄；多线程连接先中断，join 后再 close，避免句柄读写竞争。
+    void shutdown();
+    void set_send_timeout(int timeout_ms);
+
     // 查询本地端口，主要用于取得系统自动分配的端口。
     std::uint16_t local_port() const;
     bool is_open() const;

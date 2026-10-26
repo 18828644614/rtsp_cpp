@@ -178,6 +178,23 @@ void TcpSocket::shutdown_send() {
     }
 }
 
+void TcpSocket::shutdown() {
+    if (is_open()) {
+        ::shutdown(handle_, SD_BOTH);
+    }
+}
+
+void TcpSocket::set_send_timeout(int timeout_ms) {
+    if (!is_open() || timeout_ms <= 0) {
+        throw std::invalid_argument("send timeout requires an open socket and positive timeout");
+    }
+    const DWORD value = static_cast<DWORD>(timeout_ms);
+    if (::setsockopt(handle_, SOL_SOCKET, SO_SNDTIMEO,
+                     reinterpret_cast<const char*>(&value), sizeof(value)) == SOCKET_ERROR) {
+        detail::throw_socket_error("setsockopt(SO_SNDTIMEO)", WSAGetLastError());
+    }
+}
+
 std::uint16_t TcpSocket::local_port() const {
     if (!is_open()) {
         throw std::logic_error("socket is closed");

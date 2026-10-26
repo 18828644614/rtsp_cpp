@@ -250,6 +250,8 @@ src/rtsp/media_transport.cpp
 
 **难度：中等偏高。**
 
+**当前状态：已完成单路 H.264、TCP interleaved 版本。** 服务器加载文件一次，`MediaSession` 统一调度并封装共享负载；`MediaSubscription` 为每个客户端保存独立 `RtpSender`，通过弱引用维护订阅，取消后不再投递。新订阅等待 IDR，缺失的 SPS/PPS 由媒体源补齐；最后一个订阅退出后暂停并保留游标，EOF 后关闭订阅，后续 PLAY 返回 455，不自动重播。媒体时间仍为 25 fps、90 kHz 的简化时间，不解析真实 PTS/DTS。
+
 **目标：** 一个媒体源只读取一次，并向多个客户端分发。
 
 **建议新增：**

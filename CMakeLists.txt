@@ -29,6 +29,8 @@ add_library(rtsp_core STATIC
     src/media/h264_packetizer.cpp
     src/media/h264_depacketizer.cpp
     src/media/h264_file_reader.cpp
+    src/media/media_source.cpp
+    src/media/media_session.cpp
     src/media/h264_file_writer.cpp
 )
 target_include_directories(rtsp_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -78,6 +80,11 @@ if(BUILD_TESTING)
     target_link_libraries(media_file_tests PRIVATE rtsp_core)
     add_test(NAME media_file_tests COMMAND media_file_tests)
     set_tests_properties(media_file_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(media_session_tests tests/media_session_tests.cpp)
+    target_link_libraries(media_session_tests PRIVATE rtsp_core)
+    add_test(NAME media_session_tests COMMAND media_session_tests)
+    set_tests_properties(media_session_tests PROPERTIES TIMEOUT 20)
 
     find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)
     if(POWERSHELL_EXECUTABLE)

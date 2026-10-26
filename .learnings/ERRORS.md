@@ -55,6 +55,33 @@ apply_patch verification failed: invalid patch: multiple operations target E:\Ma
 
 ### 解决情况（Resolution）
 已拆成独立补丁并成功写入新版代码。
+## [ERR-20261026-001] computer-use-native-pipe-unavailable
+
+**Logged**: 2026-10-26T10:00:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: infra
+
+### 摘要（Summary）
+排查 VS Code 跳转时，桌面控制通道不可用，无法自动重载窗口并验证 F12。
+
+### 原始错误（Error）
+```text
+Computer Use native pipe is unavailable: failed to connect native pipe: 系统找不到指定的文件。 (os error 2)
+```
+
+### 上下文（Context）
+`sky.list_windows()` 重试和 JavaScript 会话重置后仍失败；项目配置已修正，CMake 配置及 JSON 检查通过，交由用户执行 `Developer: Reload Window` 验证跳转。
+
+### 建议修复（Suggested Fix）
+后续使用桌面验证前先确认 Computer Use 原生通道可用；通道不可用时保留文件检查结果并明确实际 UI 尚未验证。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: .vscode/settings.json
+
+---
+
 ## [ERR-20261022-001] tshark-capinfos-unavailable
 
 **Logged**: 2026-10-22T00:00:00+08:00
