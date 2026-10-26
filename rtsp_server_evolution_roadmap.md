@@ -1,8 +1,10 @@
 # RTSP 服务器演进路线
 
-本文档描述 `D:\rtsp_learn\rtsp_cpp` 从当前单客户端 H.264 教学版，逐步演进为支持多客户端、共享媒体源、TCP/UDP 传输、音视频多轨道和基本运行时管理的 RTSP 服务器的实施路线。
+本文档描述 `rtsp-cpp` 从单客户端 H.264 教学版，逐步演进为支持多客户端、共享媒体源、TCP/UDP 传输、音视频多轨道和基本运行时管理的 RTSP 服务器的实施路线。
 
 本文档只定义架构边界、实施顺序和验收标准，不要求一次性实现所有目标。每个阶段都应保持前一阶段的回归测试可运行。
+
+**当前顺序调整（2026-10-26）：** 阶段 1～3 已完成；阶段 4 UDP 延后，优先完成阶段 5 的 TCP 多轨道与 AAC 基础版。UDP 不是多轨道的前置条件。当前实现框架、运行方式和范围见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
 ## 一、目标和范围
 
@@ -20,7 +22,7 @@
 
 第一阶段不追求完整 RTSP 服务器能力，暂不包含认证、鉴权、随机访问、录像管理、组播和复杂资源路由。
 
-## 二、当前基线
+## 二、初始基线（阶段 0 之前）
 
 当前项目已经具备：
 
@@ -293,6 +295,8 @@ src/media/media_session.cpp
 
 **难度：中等偏高。**
 
+**当前安排：延后。** 先完成阶段 5 的 TCP 版本，下面的 UDP 目标和验收保留到恢复此阶段时执行。
+
 **目标：** 支持播放器通过 UDP 接收 RTP，同时保留 TCP interleaved。
 
 **建议新增：**
@@ -344,12 +348,15 @@ struct MediaTransport {
 
 **难度：高。**
 
+**当前状态：TCP 基础版已实现。** 多轨道 SDP、每轨道 SETUP/Transport/RtpSender、AAC-LC ADTS 读取与 AAC-hbr 封包、统一媒体时间调度、视频 IDR 后音视频共同起点、独立轨道 EOF 已接通。支持单视频、双轨道、纯音频和按需订阅。自带客户端选择 H.264 保存，音频由外部播放器接收。UDP 验收延后；真实 PTS/DTS、完整 RTCP SR 和长期播放器同步仍待后续补齐。
+
 **目标：** 从单路 H.264 扩展到 H.264 + AAC，并保持轨道状态和时间戳独立。
 
 **SessionDescription 方向：**
 
 ```cpp
 struct MediaTrack {
+    std::string media_type;
     std::string control;
     int payload_type;
     std::string encoding;
@@ -397,9 +404,11 @@ AAC-LC：每个 AU 通常包含 1024 个采样
 - `DESCRIBE` 返回视频和音频两条轨道。
 - 客户端可以分别对两条轨道执行 `SETUP`。
 - TCP 模式下视频和音频使用不同的 interleaved 通道。
-- UDP 模式下视频和音频使用各自的 RTP/RTCP 端口。
+- UDP 模式下视频和音频使用各自的 RTP/RTCP 端口（延后到阶段 4）。
 - 播放器能够同时播放 H.264 和 AAC。
 - 音频时间戳不复用视频时间戳，长时间播放不会持续漂移。
+
+**当前验证：** Debug 构建和 11 组 CTest 通过；外部 FFmpeg 通过 TCP 接收 75 帧无 B 帧 H.264 和 48 kHz 双声道 AAC-LC，视频逐帧解码哈希与源文件一致，音频解码 PCM 与源文件一致；纯音频和自带客户端选择视频也通过。此结果证明短样例传输与解码正确，不代表已验收长期音画同步。
 
 ### 阶段 6：事件循环和非阻塞网络
 
@@ -457,8 +466,8 @@ Windows 第一版可以使用 `select` 或 `WSAPoll`。当前项目以 Windows �
 阶段 1：增加 RtspServerConnection 和连接生命周期
 阶段 2：建立 Transport、RtpSender 和统一出站队列
 阶段 3：增加共享 H264MediaSource 和 MediaSession
-阶段 4：增加 UDP Socket 和按轨道的 UDP Transport
-阶段 5：增加多轨道 SDP、AAC 和统一媒体时间线
+阶段 5（优先）：增加 TCP 多轨道 SDP、AAC 和统一媒体时间线
+阶段 4（延后）：增加 UDP Socket 和按轨道的 UDP Transport
 阶段 6：将线程模型替换为非阻塞事件循环
 阶段 7：增加 RTCP、RTP-Info、保活、超时和完整清理
 ```

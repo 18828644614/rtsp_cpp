@@ -5,14 +5,16 @@
 
 namespace rtsp {
 
-std::shared_ptr<const H264PayloadUnit> H264Packetizer::packetize_access_unit(
+std::shared_ptr<const RtpPayloadUnit> H264Packetizer::packetize_access_unit(
     std::shared_ptr<const H264AccessUnit> access_unit) const {
     if (!access_unit || access_unit->nalus.empty()) {
         throw std::invalid_argument("expected a nonempty H264 access unit");
     }
-    auto result = std::make_shared<H264PayloadUnit>();
-    result->access_unit = std::move(access_unit);
-    for (const std::string& nalu : result->access_unit->nalus) {
+    auto result = std::make_shared<RtpPayloadUnit>();
+    result->pts = access_unit->pts;
+    result->clock_rate = 90000;
+    result->is_keyframe = access_unit->is_keyframe;
+    for (const std::string& nalu : access_unit->nalus) {
         for (std::string& payload : packetize(nalu)) {
             result->payloads.push_back(std::move(payload));
         }

@@ -111,3 +111,35 @@ The term 'tshark' is not recognized as a name of a cmdlet, function, script file
 - See Also: 
 
 ---
+
+## [ERR-20261026-001] ffmpeg-rtsp-range-validation
+
+**Logged**: 2026-10-26T16:38:27+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### 摘要（Summary）
+外部 FFmpeg 验证发现服务器过度限制 Range 表达，合法零起点请求被拒绝；验证脚本还使用了本机 RTSP 输入不接受的参数。
+
+### 原始错误（Error）
+```text
+method PLAY failed: 457 (Invalid Range)
+Option rw_timeout not found.
+```
+
+### 上下文（Context）
+运行 `python .verify/verify_multitrack.py`，使用 FFmpeg 8.1 经 TCP 接收 H.264 + AAC。现有自制客户端不发送 Range，因此此前自测没有覆盖外部工具发送 `npt=0.000-` 的情况。
+
+### 建议修复（Suggested Fix）
+兼容等价的零起点小数表示，继续拒绝非零 seek；保留固定协议样例与外部解码校验。验证脚本移除 `-rw_timeout`，改用进程级超时。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: src/rtsp/rtsp_server_session.cpp, tests/session_tests.cpp, .verify/verify_multitrack.py
+
+### 解决情况（Resolution）
+- **Resolved**: 2026-10-26T16:38:27+08:00
+- **Notes**: 已增加小数零起点与非零小数拒绝测试；外部双轨道、纯音频及自带视频客户端传输后解码校验通过。
+
+---

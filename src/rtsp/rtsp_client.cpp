@@ -65,7 +65,7 @@ void RtspClient::handle_interleaved(const RtspStreamItem& item) {
         throw std::runtime_error("frame arrived on an unnegotiated channel");
     }
     const RtpPacket packet = parse_rtp_packet(item.payload);
-    if (packet.payload_type != static_cast<unsigned int>(description_.video.payload_type)) {
+    if (packet.payload_type != static_cast<unsigned int>(video_.payload_type)) {
         throw std::runtime_error("RTP payload type does not match SDP");
     }
     if (received_packet_ && (packet.sequence_number != next_sequence_ || packet.ssrc != ssrc_)) {
@@ -139,6 +139,17 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
         throw std::runtime_error("DESCRIBE did not return application/sdp");
     }
     description_ = parse_sdp(describe_response.body);
+    bool found_video = false;
+    for (const MediaTrack& track : description_.tracks) {
+        if (track.media_type == "video" && track.encoding == "H264") {
+            video_ = track;
+            found_video = true;
+            break;
+        }
+    }
+    if (!found_video) {
+        throw std::runtime_error("this file-saving client requires an H264 video track");
+    }
     std::string base = describe_response.header("Content-Base");
     if (base.empty()) {
         base = describe_response.header("Content-Location");
@@ -148,7 +159,7 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
     } else {
         base = resolve_control_url(url, base);
     }
-    const std::string track_url = resolve_control_url(base, description_.video.control);
+    const std::string track_url = resolve_control_url(base, video_.control);
     // 没有聚合 control 属性时，第一版退回 DESCRIBE 请求 URL。
     const std::string aggregate_url = description_.control.empty()
                                           ? url : resolve_control_url(base, description_.control);
@@ -169,8 +180,8 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
     }
     session_id_ = session_id;
     transport_ = negotiated;
-    std::cout << "Video: " << description_.video.encoding << '/' << description_.video.clock_rate
-              << ", payload=" << description_.video.payload_type << "\nTrack: " << track_url
+    std::cout << "Video: " << video_.encoding << '/' << video_.clock_rate
+              << ", payload=" << video_.payload_type << "\nTrack: " << track_url
               << "\nSession: " << session_id_ << "\nChannels: " << transport_.rtp_channel
               << '/' << transport_.rtcp_channel << '\n';
 

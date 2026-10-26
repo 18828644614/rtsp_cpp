@@ -1,5 +1,16 @@
 # 实现记录
 
+## TCP 多轨道与 AAC（2026-10-26）
+
+- 当前 SessionDescription、RtspServerSession、MediaSubscription、RtpSender 均存在单 H.264 假设，需要顺序扩展。
+- 同一客户端所有轨道共用一个 OutboundQueue；SETUP 状态按轨道保存，序号和 SSRC 按订阅的轨道保存。
+- 当前视频固定 25 fps、90 kHz，不解析真实 PTS/DTS；音视频验证使用无 B 帧且起点一致的素材。
+- 保持自带客户端保存 H.264 的功能：解析多轨道 SDP，但只 SETUP 所选视频轨道。
+- 同步调度采用累计 PTS 换算绝对时刻，避免累加截断的 AAC 帧间隔。完整 RTCP SR 和真实容器时间戳属于后续范围。
+- 已通过 11 组 CTest；外部 FFmpeg 8.1 经 TCP 接收 75 帧视频，解码逐帧 MD5 一致；48 kHz 双声道 AAC 解码 PCM 共 581632 字节，SHA-256 与源文件一致。纯音频和自带视频客户端均通过。
+- 外部互通发现既有 Range 校验只接受 `npt=0-`，现支持等价的 `npt=0.000-`，继续拒绝非零 seek。本机 FFmpeg RTSP 输入不接受 `-rw_timeout`，验证脚本使用进程级超时。
+- 运行中出现的 `.obsidian/workspace.json` 修改属于外部编辑器状态，本次不修改或还原。
+
 ## 第六步：H.264 文件与视频收发
 
 - 保留普通结构体、函数和顺序循环；只新增 H264FileReader、H264FileWriter 和 H264AccessUnit。

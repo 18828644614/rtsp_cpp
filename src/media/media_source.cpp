@@ -7,7 +7,7 @@ namespace rtsp {
 
 H264MediaSource::H264MediaSource(const std::string& path) {
     reader_.open(path);
-    description_.video.fmtp = make_h264_fmtp(reader_.sps(), reader_.pps());
+    description_.tracks[0].fmtp = make_h264_fmtp(reader_.sps(), reader_.pps());
 }
 
 const SessionDescription& H264MediaSource::description() const {

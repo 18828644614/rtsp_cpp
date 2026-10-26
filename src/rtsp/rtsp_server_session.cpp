@@ -33,6 +33,17 @@ bool duplicate_header(const RtspMessage& request, const std::string& name) {
     return count > 1;
 }
 
+// FFmpeg 使用 npt=0.000-；它与 npt=0- 都表示从零开始。
+bool is_zero_start_range(const std::string& range) {
+    if (range == "npt=0-") {
+        return true;
+    }
+    if (range.size() < 8 || range.compare(0, 6, "npt=0.") != 0 || range.back() != '-') {
+        return false;
+    }
+    return range.substr(6, range.size() - 7).find_first_not_of('0') == std::string::npos;
+}
+
 }  // namespace
 
 RtspServerSession::RtspServerSession(const std::string& session_id,
@@ -42,6 +53,7 @@ RtspServerSession::RtspServerSession(const std::string& session_id,
     }
     session_id_ = session_id;
     description_ = description;
+    tracks_.resize(description_.tracks.size());
 }
 
 RtspMessage RtspServerSession::handle(const RtspMessage& request) {
@@ -76,10 +88,22 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
         }
     }
 
-    //判断请求是整个会话，还是视频轨道：(is_aggregate:整个会话，is_track：视频轨道)
-    //项目写死会话：/live 或 /live/，视频轨道：/live/trackID=0
+    // 资源路径仍为 /live，轨道路径来自 SDP 中的 control。
     const bool is_aggregate = path == "/live" || path == "/live/";
-    const bool is_track = path == "/live/trackID=0";
+    int track_index = -1;
+    for (std::size_t i = 0; i < description_.tracks.size(); ++i) {
+        if (path == "*") {
+            break;
+        }
+        const std::string control_url = resolve_control_url(
+            request.uri.substr(0, request.uri.find('/', 7)) + "/live/",
+            description_.tracks[i].control);
+        if (path == rtsp_url_path(control_url)) {
+            track_index = static_cast<int>(i);
+            break;
+        }
+    }
+    const bool is_track = track_index >= 0;
     if (!is_aggregate && !is_track && path != "*") {
         return response_for(request, 404, "Not Found");
     }
@@ -118,17 +142,25 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
         if (!is_track) {
             return response_for(request, 459, "Aggregate Operation Not Allowed");
         }
-        if (state_ != SessionInit) {
+        if ((state_ != SessionInit && state_ != SessionReady) || tracks_[track_index].setup) {
             return response_for(request, 455, "Method Not Valid in This State");
+        }
+        if (state_ == SessionReady && requested_session.empty()) {
+            return response_for(request, 454, "Session Not Found");
         }
         TcpTransport requested_transport;
         if (!parse_tcp_transport(request.header("Transport"), requested_transport)) {
             return response_for(request, 461, "Unsupported Transport");
         }
         // 只有全部检查通过，才保存通道并切换状态；错误请求不改变会话。
-        transport_ = requested_transport;
+        if (has_channel(requested_transport.rtp_channel)
+            || has_channel(requested_transport.rtcp_channel)) {
+            return response_for(request, 461, "Unsupported Transport");
+        }
+        tracks_[track_index].setup = true;
+        tracks_[track_index].transport = requested_transport;
         state_ = SessionReady;
-        response.set_header("Transport", make_tcp_transport(transport_));
+        response.set_header("Transport", make_tcp_transport(requested_transport));
         response.set_header("Session", session_id_);
     } else if (method == "PLAY") {
         if (!is_aggregate) {
@@ -138,7 +170,7 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
             return response_for(request, 455, "Method Not Valid in This State");
         }
         // 暂不支持任意位置 seek；仅接受从头播放，或不提供 Range。
-        if (!request.header("Range").empty() && request.header("Range") != "npt=0-") {
+        if (!request.header("Range").empty() && !is_zero_start_range(request.header("Range"))) {
             return response_for(request, 457, "Invalid Range");
         }
         state_ = SessionPlaying;
@@ -160,8 +192,18 @@ RtspSessionState RtspServerSession::state() const {
     return state_;
 }
 
-TcpTransport RtspServerSession::transport() const {
-    return transport_;
+const std::vector<TrackState>& RtspServerSession::tracks() const {
+    return tracks_;
+}
+
+bool RtspServerSession::has_channel(unsigned int channel) const {
+    for (const TrackState& track : tracks_) {
+        if (track.setup && (channel == static_cast<unsigned int>(track.transport.rtp_channel)
+            || channel == static_cast<unsigned int>(track.transport.rtcp_channel))) {
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace rtsp

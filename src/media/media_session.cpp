@@ -7,13 +7,31 @@
 
 namespace rtsp {
 
-MediaSubscription::MediaSubscription(std::shared_ptr<net::OutboundQueue> queue,
-                                     MediaTransport transport, int payload_type,
-                                     std::uint16_t sequence, std::uint32_t ssrc)
-    : queue_(std::move(queue)), sender_(std::move(transport), payload_type, sequence, ssrc) {
+MediaSubscription::MediaSubscription(std::shared_ptr<net::OutboundQueue> queue)
+    : queue_(std::move(queue)) {
     if (!queue_) {
         throw std::invalid_argument("subscription requires an outbound queue");
     }
+}
+
+void MediaSubscription::add_track(std::size_t index, const MediaTrack& track,
+                                   TcpTransport transport, std::uint16_t sequence,
+                                   std::uint32_t ssrc) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (active_ || started_) {
+        throw std::logic_error("add tracks before PLAY");
+    }
+    for (const TrackSender& existing : tracks_) {
+        if (existing.index == index) {
+            throw std::logic_error("track already added");
+        }
+    }
+    TrackSender state;
+    state.index = index;
+    state.sender = std::make_unique<RtpSender>(MediaTransport(transport),
+                                             track.payload_type, sequence, ssrc);
+    tracks_.push_back(std::move(state));
+    has_video_ = has_video_ || track.media_type == "video";
 }
 
 MediaSubscription::~MediaSubscription() {
@@ -22,7 +40,7 @@ MediaSubscription::~MediaSubscription() {
 
 bool MediaSubscription::start(const std::string& play_response) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!queue_->push({net::OutboundKind::RtspResponse, play_response})) {
+    if (tracks_.empty() || !queue_->push({net::OutboundKind::RtspResponse, play_response})) {
         return false;
     }
     active_ = true;
@@ -44,23 +62,41 @@ bool MediaSubscription::failed() const {
     return failed_;
 }
 
-void MediaSubscription::deliver(const std::shared_ptr<const H264PayloadUnit>& unit) {
+void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& unit) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!active_ || (waiting_for_idr_ && !unit->access_unit->is_keyframe)) {
+    if (!active_) {
         return;
     }
-    waiting_for_idr_ = false;
-    try {
-        if (sender_.send_payloads(*unit, *queue_)) {
+    for (TrackSender& track : tracks_) {
+        if (track.index != track_index) {
+            continue;
+        }
+        if (!started_) {
+            // 有视频时等待 IDR；只订阅音频时从当前 AU 开始。
+            if (has_video_ && !unit.is_keyframe) {
+                return;
+            }
+            start_pts_ = unit.pts;
+            start_clock_rate_ = unit.clock_rate;
+            started_ = true;
+        }
+        if (unit.pts * start_clock_rate_ < start_pts_ * unit.clock_rate) {
             return;
         }
-    } catch (const std::exception& error) {
-        std::cerr << "Subscription send error: " << error.what() << '\n';
+        const std::uint64_t base = start_pts_ * unit.clock_rate / start_clock_rate_;
+        const auto timestamp = static_cast<std::uint32_t>(unit.pts - base);
+        try {
+            if (track.sender->send_payloads(unit, timestamp, *queue_)) {
+                return;
+            }
+        } catch (const std::exception& error) {
+            std::cerr << "Subscription send error: " << error.what() << '\n';
+        }
+        failed_ = true;
+        active_ = false;
+        queue_->close();
+        return;
     }
-    // 入队失败只结束这一个订阅，连接线程负责中断 Socket。
-    failed_ = true;
-    active_ = false;
-    queue_->close();
 }
 
 void MediaSubscription::finish(bool failed) {
@@ -69,7 +105,7 @@ void MediaSubscription::finish(bool failed) {
         return;  // 已取消的订阅由连接自行关闭队列，不能抢在 TEARDOWN 响应前关闭。
     }
     failed_ = failed_ || failed;
-    if (waiting_for_idr_ && !failed) {
+    if (!started_ && has_video_ && !failed) {
         std::cout << "Subscription ended before an IDR became available" << std::endl;
     }
     active_ = false;
@@ -77,7 +113,22 @@ void MediaSubscription::finish(bool failed) {
     queue_->close();
 }
 
-MediaSession::MediaSession(const std::string& input_path) : source_(input_path) {
+MediaSession::MediaSession(const std::string& video_path, const std::string& audio_path) {
+    description_.tracks.clear();
+    if (!video_path.empty()) {
+        video_source_ = std::make_unique<H264MediaSource>(video_path);
+        video_track_ = description_.tracks.size();
+        description_.tracks.push_back(video_source_->description().tracks[0]);
+    }
+    if (!audio_path.empty()) {
+        audio_source_ = std::make_unique<AacFileReader>();
+        audio_source_->open(audio_path);
+        audio_track_ = description_.tracks.size();
+        description_.tracks.push_back(audio_source_->track());
+    }
+    if (description_.tracks.empty()) {
+        throw std::invalid_argument("provide a video or audio file");
+    }
     worker_ = std::thread(&MediaSession::run, this);
 }
 
@@ -86,7 +137,7 @@ MediaSession::~MediaSession() {
 }
 
 const SessionDescription& MediaSession::description() const {
-    return source_.description();
+    return description_;
 }
 
 SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>& subscription,
@@ -146,18 +197,17 @@ void MediaSession::finish(bool failed) {
 
 void MediaSession::run() {
     using Clock = std::chrono::steady_clock;
-    auto next_send = Clock::now();
+    auto clock_origin = Clock::now();
+    bool reset_clock = true;
+    std::shared_ptr<const RtpPayloadUnit> video;
+    std::shared_ptr<const RtpPayloadUnit> audio;
     try {
         for (;;) {
-            // subscribers_: 成员变量，保存 weak_ptr, 记录会话中的订阅者
-            // subscribers: 局部变量，保存 shared_ptr, 保存本轮要投递的订阅者快照
             std::vector<std::shared_ptr<MediaSubscription>> subscribers;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
-                // 取消的订阅和已销毁的连接都不再推动媒体进度。
                 auto it = subscribers_.begin();
                 while (it != subscribers_.end()) {
-                    // 从成员表中的一个 weak_ptr，尝试取得临时 shared_ptr
                     auto subscriber = it->lock();
                     if (!subscriber || subscriber->finished()) {
                         it = subscribers_.erase(it);
@@ -171,31 +221,58 @@ void MediaSession::run() {
                 }
                 if (subscribers.empty()) {
                     condition_.wait(lock, [this] { return stopping_ || !subscribers_.empty(); });
-                    // 暂停期间不消耗文件；恢复时不补发暂停期间的帧。
-                    next_send = Clock::now();
+                    reset_clock = true;
                     continue;
-                }
-                if (Clock::now() < next_send) {
-                    condition_.wait_until(lock, next_send);
-                    continue;  // 重新获取快照，让等待期间加入的客户端也收到下一帧。
                 }
                 started_ = true;
             }
 
-            const auto frame = source_.read();
-            if (!frame) {
+            // 每条轨道只预读一帧，选择媒体时间更早的帧。负载只封装一次。
+            if (!video && video_source_ && !video_source_->ended()) {
+                const auto frame = video_source_->read();
+                if (frame) {
+                    video = video_packetizer_.packetize_access_unit(frame);
+                }
+            }
+            if (!audio && audio_source_ && !audio_source_->ended()) {
+                AacAccessUnit frame;
+                if (audio_source_->read(frame)) {
+                    audio = audio_packetizer_.packetize(frame, audio_source_->track().clock_rate);
+                }
+            }
+            if (!video && !audio) {
                 break;
             }
-            const auto payloads = packetizer_.packetize_access_unit(frame);
-            // 不持有订阅表锁，不访问 Socket，只执行有界队列的非阻塞入队。
+            bool send_video = false;
+            if (video && (!audio || video->pts * audio->clock_rate <= audio->pts * video->clock_rate)) {
+                send_video = true;
+            }
+            const auto unit = send_video ? video : audio;
+            const std::size_t track_index = send_video ? video_track_ : audio_track_;
+            const auto media_time = std::chrono::microseconds(unit->pts * 1000000 / unit->clock_rate);
+            if (reset_clock) {
+                clock_origin = Clock::now() - media_time;
+                reset_clock = false;
+            }
+            const auto deadline = clock_origin + media_time;
+            if (Clock::now() < deadline) {
+                std::unique_lock<std::mutex> lock(mutex_);
+                condition_.wait_until(lock, deadline);
+                continue;  // 等待后重新获取订阅快照，并检查停止状态。
+            }
             for (const auto& subscriber : subscribers) {
-                subscriber->deliver(payloads);
+                subscriber->deliver(track_index, *unit);
             }
-            if (source_.ended()) {
+            if (send_video) {
+                video.reset();
+            } else {
+                audio.reset();
+            }
+            // 一条轨道 EOF 不关闭连接；两条轨道均发送完才统一结束。
+            if (!video && !audio && (!video_source_ || video_source_->ended())
+                && (!audio_source_ || audio_source_->ended())) {
                 break;
             }
-            next_send += std::chrono::microseconds(
-                static_cast<std::uint64_t>(frame->duration) * 1000000 / 90000);
         }
         finish(false);
     } catch (const std::exception& error) {

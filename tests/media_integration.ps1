@@ -146,13 +146,21 @@ function Test-ClientReception([string]$Case) {
             $body = ''
             if ($cseq -eq 2) {
                 $body = "v=0$($crlf)a=control:*$($crlf)m=video 0 RTP/AVP 104$($crlf)a=rtpmap:104 H264/90000$($crlf)a=fmtp:104 packetization-mode=1$($crlf)a=control:trackID=0$crlf"
+                if ($Case -eq 'mock-multitrack') {
+                    # 音频放在第一条，检查客户端会查找 H.264，而不是取 tracks[0]。
+                    $audioSdp = "m=audio 0 RTP/AVP 97$($crlf)a=rtpmap:97 MPEG4-GENERIC/48000/2$($crlf)a=fmtp:97 mode=AAC-hbr;config=1190;SizeLength=13;IndexLength=3;IndexDeltaLength=3$($crlf)a=control:trackID=1$crlf"
+                    $body = $body.Replace("m=video", $audioSdp + "m=video")
+                }
                 $headers = "Content-Type: application/sdp$($crlf)Content-Base: rtsp://127.0.0.1/live/$($crlf)Content-Length: $($body.Length)$crlf"
             }
-            if ($cseq -eq 3) { $headers += "Transport: RTP/AVP/TCP;unicast;interleaved=6-7$crlf" }
+            if ($cseq -eq 3) {
+                Check ($request.StartsWith('SETUP rtsp://127.0.0.1/live/trackID=0 ')) 'client selected wrong track'
+                $headers += "Transport: RTP/AVP/TCP;unicast;interleaved=6-7$crlf"
+            }
             $response = "RTSP/1.0 200 OK$($crlf)CSeq: $cseq$($crlf)$headers$crlf$body"
             if ($cseq -lt 4) { Send-Text $stream $response; continue }
             $media = Make-Rtp 65535 ([byte[]](0x65, 0xaa))
-            if ($Case -eq 'mock-valid') {
+            if ($Case -eq 'mock-valid' -or $Case -eq 'mock-multitrack') {
                 $media = [byte[]](36, 7, 0, 1, 0) + $media + (Make-Rtp 0 ([byte[]](0x41, 0xbb)))
             } elseif ($Case -eq 'mock-truncated') {
                 $media = $media[0..($media.Length - 2)]
@@ -174,7 +182,7 @@ function Test-ClientReception([string]$Case) {
         }
         Check ($process.WaitForExit(5000)) 'mock client timed out'
         $process.Refresh()
-        if ($Case -eq 'mock-valid') {
+        if ($Case -eq 'mock-valid' -or $Case -eq 'mock-multitrack') {
             Check ($process.ExitCode -eq 0) 'client lost media adjacent to PLAY response'
             $expected = [byte[]](0, 0, 0, 1, 0x65, 0xaa, 0, 0, 0, 1, 0x41, 0xbb)
             Check ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($output)) -eq [Convert]::ToBase64String($expected)) 'mock media content changed'
@@ -296,7 +304,7 @@ try {
     $peer.Dispose()
     $peer = $null
     Stop-App $server
-    foreach ($case in @('mock-valid', 'mock-truncated', 'mock-fu-eof', 'mock-no-marker', 'mock-wrong-pt', 'mock-wrong-channel', 'mock-gap')) {
+    foreach ($case in @('mock-valid', 'mock-multitrack', 'mock-truncated', 'mock-fu-eof', 'mock-no-marker', 'mock-wrong-pt', 'mock-wrong-channel', 'mock-gap')) {
         Test-ClientReception $case
     }
     Write-Output 'PASS: shared progress, late IDR, EOF rejection, TEARDOWN, SDP, channels, RTP fields and FU-A'

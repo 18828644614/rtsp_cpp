@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media/h264_packetizer.h"
+#include "rtp/rtp_payload.h"
 #include "net/outbound_queue.h"
 #include "rtp/rtp_packet.h"
 #include "rtsp/media_transport.h"
@@ -20,7 +20,8 @@ public:
     RtpSender& operator=(const RtpSender&) = delete;
 
     // 只生成并入队 RTP，不直接访问 Socket。失败表示输出队列已满或已关闭。
-    bool send_payloads(const H264PayloadUnit& unit, net::OutboundQueue& queue);
+    bool send_payloads(const RtpPayloadUnit& unit, std::uint32_t timestamp,
+                       net::OutboundQueue& queue);
     std::uint16_t next_sequence() const;
     std::uint32_t ssrc() const;
 
@@ -30,8 +31,6 @@ private:
     std::uint16_t sequence_;
     std::uint32_t ssrc_;
 
-    bool started_ = false;
-    std::uint64_t first_pts_ = 0;
 };
 
 }  // namespace rtsp

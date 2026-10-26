@@ -9,9 +9,10 @@
 
 namespace rtsp {
 
-RtspServer::RtspServer(std::string address, std::uint16_t port, std::string input_path)
+RtspServer::RtspServer(std::string address, std::uint16_t port, std::string video_path,
+                       std::string audio_path)
     : address_(std::move(address)), port_(port),
-      media_session_(std::make_shared<MediaSession>(input_path)) {}
+      media_session_(std::make_shared<MediaSession>(video_path, audio_path)) {}
 
 RtspServer::~RtspServer() {
     stop();

@@ -113,15 +113,15 @@ void test_sdp() {
         "a=fmtp:104 packetization-mode=1;profile-level-id=42e01f\r\n"
         "a=control:/live/trackID=7\r\n";
     const rtsp::SessionDescription parsed = rtsp::parse_sdp(external);
-    check(parsed.video.payload_type == 104 && parsed.video.encoding == "H264"
-              && parsed.video.clock_rate == 90000, "SDP mapping was lost");
-    check(parsed.video.control == "/live/trackID=7", "SDP media control was lost");
+    check(parsed.tracks[0].payload_type == 104 && parsed.tracks[0].encoding == "H264"
+              && parsed.tracks[0].clock_rate == 90000, "SDP mapping was lost");
+    check(parsed.tracks[0].control == "/live/trackID=7", "SDP media control was lost");
     check(parsed.control == "rtsp://127.0.0.1:8554/live", "SDP aggregate control was lost");
-    check(parsed.video.fmtp == "packetization-mode=1;profile-level-id=42e01f", "fmtp was lost");
+    check(parsed.tracks[0].fmtp == "packetization-mode=1;profile-level-id=42e01f", "fmtp was lost");
     const rtsp::SessionDescription roundtrip = rtsp::parse_sdp(rtsp::make_sdp(parsed));
-    check(roundtrip.video.control == parsed.video.control, "SDP round trip failed");
+    check(roundtrip.tracks[0].control == parsed.tracks[0].control, "SDP round trip failed");
 
-    // 缺失 control/rtpmap 或出现第二条媒体，不能靠结构体默认值假装成功。
+    // 缺失 control/rtpmap 或出现不完整媒体，不能靠结构体默认值假装成功。
     const std::string bad[] = {
         "", "v=1\nm=video 0 RTP/AVP 96\na=rtpmap:96 H264/90000\na=control:trackID=0\n",
         "v=0\nm=video 0 RTP/AVP 96\na=control:trackID=0\n",
@@ -157,7 +157,7 @@ void test_complete_session() {
           "DESCRIBE did not return SDP");
     const rtsp::SessionDescription sdp = rtsp::parse_sdp(response.body);
     const std::string base = response.header("Content-Base");
-    const std::string track_url = rtsp::resolve_control_url(base, sdp.video.control);
+    const std::string track_url = rtsp::resolve_control_url(base, sdp.tracks[0].control);
     const std::string aggregate_url = rtsp::resolve_control_url(base, sdp.control);
     check(track_url == url + "/trackID=0", "DESCRIBE returned an incorrect base URL");
 
@@ -167,7 +167,7 @@ void test_complete_session() {
     check(response.status_code == 200 && response.header("Session") == "12345",
           "SETUP did not establish a Session");
     check(response.header("Transport") == "RTP/AVP/TCP;unicast;interleaved=10-11"
-              && session.transport().rtp_channel == 10, "SETUP did not negotiate channels");
+              && session.tracks()[0].transport.rtp_channel == 10, "SETUP did not negotiate channels");
     check(session.state() == rtsp::SessionReady, "SETUP did not enter Ready");
     response = respond(session, request("PLAY", aggregate_url, "12345;timeout=60"));
     check(response.status_code == 200 && session.state() == rtsp::SessionPlaying,
@@ -177,6 +177,48 @@ void test_complete_session() {
           "TEARDOWN did not close the session");
     check(respond(session, request("PLAY", aggregate_url, "12345")).status_code == 454,
           "closed Session was reused");
+}
+
+void test_multitrack_sdp_and_setup_order() {
+    // 手工 SDP，音频在前，视频使用非默认 control。
+    const std::string text = "v=0\r\na=control:*\r\n"
+        "m=audio 0 RTP/AVP 97\r\na=rtpmap:97 MPEG4-GENERIC/44100/1\r\n"
+        "a=fmtp:97 mode=AAC-hbr;config=1208;SizeLength=13;IndexLength=3;IndexDeltaLength=3\r\n"
+        "a=control:trackID=3\r\n"
+        "m=video 0 RTP/AVP 104\r\na=rtpmap:104 H264/90000\r\na=control:trackID=7\r\n";
+    const auto description = rtsp::parse_sdp(text);
+    const auto roundtrip = rtsp::parse_sdp(rtsp::make_sdp(description));
+    check(roundtrip.tracks.size() == 2 && roundtrip.tracks[0].channels == 1
+              && roundtrip.tracks[0].clock_rate == 44100
+              && roundtrip.tracks[1].control == "trackID=7", "multitrack SDP did not round trip");
+    rtsp::RtspServerSession session("123", description);
+    const std::string url = "rtsp://127.0.0.1/live";
+    auto audio = request("SETUP", url + "/trackID=3");
+    audio.set_header("Transport", "RTP/AVP/TCP;unicast;interleaved=10-11");
+    check(respond(session, audio).status_code == 200, "audio-first SETUP failed");
+    auto video = request("SETUP", url + "/trackID=7", "123");
+    video.set_header("Transport", "RTP/AVP/TCP;unicast;interleaved=6-7");
+    check(respond(session, video).status_code == 200, "custom video control was not resolved");
+    check(session.has_channel(6) && session.has_channel(7) && session.has_channel(10)
+              && session.has_channel(11) && !session.has_channel(0), "channel lookup mixed tracks");
+    check(respond(session, request("PLAY", url, "123")).status_code == 200,
+          "audio-first session could not PLAY");
+
+    const std::string bad[] = {
+        text + "a=rtpmap:104 H264/90000\r\n",
+        text + "a=fmtp:97 wrong-track\r\n",
+        "v=0\nm=audio 0 RTP/AVP 97\na=rtpmap:97 MPEG4-GENERIC/0/2\na=fmtp:97 config=1190\na=control:t\n",
+        "v=0\nm=audio 0 RTP/AVP 97\na=rtpmap:97 MPEG4-GENERIC/48000/2\na=control:t\n"
+    };
+    for (const std::string& value : bad) {
+        bool rejected = false;
+        try {
+            rtsp::parse_sdp(value);
+        } catch (const std::runtime_error&) {
+            rejected = true;
+        }
+        check(rejected, "invalid audio SDP was accepted");
+    }
 }
 
 void test_rejected_requests() {
@@ -207,6 +249,8 @@ void test_rejected_requests() {
     play.set_header("Range", "npt=10-");
     check(respond(session, play).status_code == 457, "unsupported seek was accepted");
     check(session.state() == rtsp::SessionReady, "rejected request changed Ready state");
+    play.set_header("Range", "npt=0.001-");
+    check(respond(session, play).status_code == 457, "nonzero fractional seek was accepted");
 
     rtsp::RtspMessage duplicate = request("PLAY", url, "98765");
     rtsp::RtspHeader header;
@@ -214,7 +258,8 @@ void test_rejected_requests() {
     header.value = "wrong-id";
     duplicate.headers.push_back(header);
     check(respond(session, duplicate).status_code == 400, "duplicate Session was accepted");
-    check(respond(session, request("PLAY", url, "98765")).status_code == 200,
+    play.set_header("Range", "npt=0.000-");
+    check(respond(session, play).status_code == 200,
           "valid PLAY failed after rejected requests");
     check(respond(session, request("PLAY", url, "98765")).status_code == 455,
           "repeated PLAY was accepted");
@@ -237,6 +282,7 @@ int main() {
         test_sdp();
         std::cout << "PASS: SDP configuration and invalid input\n";
         test_complete_session();
+        test_multitrack_sdp_and_setup_order();
         std::cout << "PASS: complete RTSP session with negotiated channels\n";
         test_rejected_requests();
         std::cout << "PASS: invalid Session, Transport, URL and state transitions\n";

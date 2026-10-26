@@ -32,6 +32,7 @@ private:
     int next_cseq_ = 1;
     std::string session_id_;
     SessionDescription description_;
+    MediaTrack video_;
     TcpTransport transport_;
     H264FileWriter writer_;
     H264Depacketizer depacketizer_;

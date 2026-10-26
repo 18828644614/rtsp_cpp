@@ -13,6 +13,11 @@ enum RtspSessionState {
     SessionClosed    // TEARDOWN 成功，应关闭连接。
 };
 
+struct TrackState {
+    bool setup = false;
+    TcpTransport transport;
+};
+
 // 只判断请求、生成响应和保存状态，不直接收发 Socket。
 // 这样可以直接用固定请求测试错误流程，不必为每个测试建立连接。
 class RtspServerSession {
@@ -23,12 +28,13 @@ public:
     //根据客户端的请求和当前会话状态，决定是否允许操作，更新会话，并生成对应的 RTSP 响应
     RtspMessage handle(const RtspMessage& request);
     RtspSessionState state() const;
-    TcpTransport transport() const;
+    const std::vector<TrackState>& tracks() const;
+    bool has_channel(unsigned int channel) const;
 
 private:
     std::string session_id_;
     RtspSessionState state_ = SessionInit;
-    TcpTransport transport_;
+    std::vector<TrackState> tracks_;
     SessionDescription description_;
 };
 

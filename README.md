@@ -4,6 +4,19 @@
 
 当前已完成实施路线的 **第 1～6 步**，并完成演进路线的 **阶段 1～3**。服务器只加载一次 H.264 文件，由共享 `MediaSession` 按每 40 ms 一个访问单元统一读取、封装负载和分发。每个客户端仍有独立的 RTSP 会话、RTP 状态、有界出站队列和发送线程；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。允许包含 B 帧，当前时间戳仍是按解码顺序生成的简化时间，不处理真实 PTS/DTS 和实时显示同步。
 
+**新增：演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，由一个媒体线程统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
+
+```powershell
+# 双轨道，音频参数可省略；省略后仍为原来的单视频模式。
+.\build\Debug\rtsp_server.exe 8554 127.0.0.1 samples/sample.h264 samples/sample.aac
+ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
+
+# 纯音频资源，用 - 关闭视频。
+.\build\Debug\rtsp_server.exe 8554 127.0.0.1 - samples/sample.aac
+```
+
+自带客户端继续选择 H.264 轨道保存文件，暂不保存 AAC。音视频时间均假定从零开始，视频固定 25 fps；同步测试请使用无 B 帧视频。完整 RTCP SR 和长期播放器同步仍属于后续工作。
+
 ## 当前实现与运行
 
 已实现的代码：
@@ -18,7 +31,11 @@
 | `src/rtsp/rtsp_message.h/.cpp` | 保存、解析和生成 RTSP 请求/响应 |
 | `src/rtsp/rtsp_stream_parser.h/.cpp` | 累积 TCP 字节，拆出文本消息或交织帧 |
 | `src/rtsp/rtsp_session_utils.h/.cpp` | TCP Transport、Session 字段和控制 URL |
-| `src/sdp/session_description.h/.cpp` | 单路 H.264 视频的 SDP 生成与解析 |
+| `src/sdp/session_description.h/.cpp` | H.264 / MPEG4-GENERIC 多轨道 SDP 生成与解析 |
+| `src/rtp/rtp_payload.h` | 两种媒体共用的 RTP 负载和媒体时间 |
+| `src/media/aac_access_unit.h` | 裸 AAC、采样时间和持续采样数 |
+| `src/media/aac_file_reader.h/.cpp` | ADTS AAC-LC 读取、配置检查和 SDP 配置 |
+| `src/media/aac_packetizer.h/.cpp` | MPEG4-GENERIC / AAC-hbr AU Header 封装 |
 | `src/rtp/rtp_packet.h/.cpp` | RTP 公共头、CSRC、扩展头、Padding 的解析与生成 |
 | `src/rtp/rtp_sender.h/.cpp` | 为单客户端单轨道维护 RTP 状态并投递 RTP |
 | `src/media/h264_packetizer.h/.cpp` | 原始 NALU 转换为单 NALU 或 FU-A 负载 |
@@ -43,6 +60,8 @@
 | `tests/media_file_tests.cpp` | 文件读写、AUD 分组、SDP 参数和截断检查 |
 | `tests/outbound_tests.cpp` | 出站队列边界、FIFO 和 RTP Sender 字段验证 |
 | `tests/media_session_tests.cpp` | 共享进度、晚加入、暂停恢复、慢订阅、EOF 和线程停止 |
+| `tests/aac_tests.cpp` | ADTS、CRC 头、ASC、固定 AU Header 和非法输入 |
+| `tests/multitrack_tests.cpp` | TCP 双轨道 SETUP、共享时间线、晚加入、取消与独立 EOF |
 | `tests/media_integration.ps1` | 多客户端共享传输、晚加入、EOF 拒绝重播、TEARDOWN、线上 RTP 字段和客户端异常验证 |
 
 构建与测试：

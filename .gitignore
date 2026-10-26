@@ -3,4 +3,5 @@
 /.verify/
 /.vs/
 /samples/*.h264
+/samples/*.aac
 /received.h264

@@ -14,15 +14,11 @@ RtpSender::RtpSender(MediaTransport transport, int payload_type, std::uint16_t s
     }
 }
 
-bool RtpSender::send_payloads(const H264PayloadUnit& unit, net::OutboundQueue& queue) {
-    if (!unit.access_unit || unit.payloads.empty()) {
-        throw std::invalid_argument("expected H264 payloads with an access unit");
+bool RtpSender::send_payloads(const RtpPayloadUnit& unit, std::uint32_t timestamp,
+                              net::OutboundQueue& queue) {
+    if (unit.payloads.empty()) {
+        throw std::invalid_argument("expected nonempty RTP payloads");
     }
-    if (!started_) {
-        first_pts_ = unit.access_unit->pts;
-        started_ = true;
-    }
-    const auto timestamp = static_cast<std::uint32_t>(unit.access_unit->pts - first_pts_);
     for (std::size_t index = 0; index < unit.payloads.size(); ++index) {
         RtpPacket packet;
         packet.payload_type = static_cast<unsigned int>(payload_type_);

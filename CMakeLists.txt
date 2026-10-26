@@ -29,6 +29,8 @@ add_library(rtsp_core STATIC
     src/media/h264_packetizer.cpp
     src/media/h264_depacketizer.cpp
     src/media/h264_file_reader.cpp
+    src/media/aac_file_reader.cpp
+    src/media/aac_packetizer.cpp
     src/media/media_source.cpp
     src/media/media_session.cpp
     src/media/h264_file_writer.cpp
@@ -85,6 +87,16 @@ if(BUILD_TESTING)
     target_link_libraries(media_session_tests PRIVATE rtsp_core)
     add_test(NAME media_session_tests COMMAND media_session_tests)
     set_tests_properties(media_session_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(aac_tests tests/aac_tests.cpp)
+    target_link_libraries(aac_tests PRIVATE rtsp_core)
+    add_test(NAME aac_tests COMMAND aac_tests)
+    set_tests_properties(aac_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(multitrack_tests tests/multitrack_tests.cpp)
+    target_link_libraries(multitrack_tests PRIVATE rtsp_core)
+    add_test(NAME multitrack_tests COMMAND multitrack_tests)
+    set_tests_properties(multitrack_tests PROPERTIES TIMEOUT 20)
 
     find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)
     if(POWERSHELL_EXECUTABLE)

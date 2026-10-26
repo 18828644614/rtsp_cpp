@@ -17,7 +17,8 @@ class MediaSession;
 
 class RtspServer {
 public:
-    RtspServer(std::string address, std::uint16_t port, std::string input_path);
+    RtspServer(std::string address, std::uint16_t port, std::string video_path,
+               std::string audio_path = "");
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;

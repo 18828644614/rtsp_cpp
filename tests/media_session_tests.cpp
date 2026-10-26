@@ -51,8 +51,8 @@ struct Peer {
         rtsp::TcpTransport tcp;
         tcp.rtp_channel = channel;
         tcp.rtcp_channel = channel + 1;
-        subscription = std::make_shared<rtsp::MediaSubscription>(
-            queue, rtsp::MediaTransport(tcp), 96, sequence, ssrc);
+        subscription = std::make_shared<rtsp::MediaSubscription>(queue);
+        subscription->add_track(0, rtsp::MediaTrack(), tcp, sequence, ssrc);
     }
     std::shared_ptr<rtsp::net::OutboundQueue> queue;
     std::shared_ptr<rtsp::MediaSubscription> subscription;

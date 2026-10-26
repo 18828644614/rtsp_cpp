@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media/h264_access_unit.h"
+#include "rtp/rtp_payload.h"
 
 #include <cstddef>
 #include <memory>
@@ -9,15 +10,9 @@
 
 namespace rtsp {
 
-// 访问单元和它的负载均不可变，可供多个订阅者同时使用。
-struct H264PayloadUnit {
-    std::shared_ptr<const H264AccessUnit> access_unit;
-    std::vector<std::string> payloads;
-};
-
 class H264Packetizer {
 public:
-    std::shared_ptr<const H264PayloadUnit> packetize_access_unit(
+    std::shared_ptr<const RtpPayloadUnit> packetize_access_unit(
         std::shared_ptr<const H264AccessUnit> access_unit) const;
 
     // 输入一个 NALU：包含 NAL 头，不包含 Annex-B 起始码。

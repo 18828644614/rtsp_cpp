@@ -135,9 +135,7 @@ void RtspServerConnection::run() {
                     if (session.state() == SessionInit) {
                         throw std::runtime_error("unexpected media frame before SETUP");
                     }
-                    const TcpTransport transport = session.transport();
-                    if (item.channel != static_cast<unsigned int>(transport.rtp_channel)
-                        && item.channel != static_cast<unsigned int>(transport.rtcp_channel)) {
+                    if (!session.has_channel(item.channel)) {
                         throw std::runtime_error("frame arrived on an unnegotiated channel");
                     }
                     continue;
@@ -157,9 +155,14 @@ void RtspServerConnection::run() {
                 bool commit = true;
                 if (request.method == "PLAY" && response.status_code == 200) {
                     // 创建媒体订阅 
-                    auto candidate = std::make_shared<MediaSubscription>(
-                        outbound_queue_, MediaTransport(next_session.transport()),
-                        description.video.payload_type, static_cast<std::uint16_t>(100), make_ssrc());
+                    auto candidate = std::make_shared<MediaSubscription>(outbound_queue_);
+                    const std::vector<TrackState>& tracks = next_session.tracks();
+                    for (std::size_t i = 0; i < tracks.size(); ++i) {
+                        if (tracks[i].setup) {
+                            candidate->add_track(i, description.tracks[i], tracks[i].transport,
+                                                 100, make_ssrc());
+                        }
+                    }
                     
                     // candidate	刚创建的客户端订阅
                     // serialize_rtsp_message(response)	把 PLAY 响应转换成可发送的字符串
@@ -246,6 +249,8 @@ void RtspServerConnection::send_loop() {
             std::cerr << "Session " << session_id_ << " send error: " << error.what() << '\n';
         }
     }
+    // 发送已结束，也通知接收线程退出，避免正常 EOF 的 shutdown 被当作接收错误。
+    stop_requested_.store(true, std::memory_order_release);
     // 仅中断收发，不修改句柄。管理线程 join 两个线程后才真正 close。
     socket_.shutdown();
     sender_finished_.store(true, std::memory_order_release);
