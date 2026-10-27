@@ -14,16 +14,15 @@ const SessionDescription& H264MediaSource::description() const {
     return description_;
 }
 
-std::shared_ptr<const H264AccessUnit> H264MediaSource::read() {
-    auto frame = std::make_shared<H264AccessUnit>();
-    if (!reader_.read(*frame)) {
-        return {};
+bool H264MediaSource::read(H264AccessUnit& frame) {
+    if (!reader_.read(frame)) {
+        return false;
     }
     ++read_count_;
 
     bool has_sps = false;
     bool has_pps = false;
-    for (const std::string& nalu : frame->nalus) {
+    for (const std::string& nalu : frame.nalus) {
         const unsigned int type = static_cast<unsigned char>(nalu[0]) & 0x1f;
         if (type == 7) {
             sps_ = nalu;
@@ -37,24 +36,24 @@ std::shared_ptr<const H264AccessUnit> H264MediaSource::read() {
     }
 
     // 给缺少参数集的 IDR 补齐参数。所有客户端复用同一份结果，只封装一次。
-    if (frame->is_keyframe && (!has_sps || !has_pps)) {
+    if (frame.is_keyframe && (!has_sps || !has_pps)) {
         std::vector<std::string> nalus;
         std::size_t begin = 0;
-        while (begin < frame->nalus.size()
-               && (static_cast<unsigned char>(frame->nalus[begin][0]) & 0x1f) == 9) {
-            nalus.push_back(frame->nalus[begin++]);
+        while (begin < frame.nalus.size()
+               && (static_cast<unsigned char>(frame.nalus[begin][0]) & 0x1f) == 9) {
+            nalus.push_back(std::move(frame.nalus[begin++]));
         }
         nalus.push_back(sps_);
         nalus.push_back(pps_);
-        for (; begin < frame->nalus.size(); ++begin) {
-            const unsigned int type = static_cast<unsigned char>(frame->nalus[begin][0]) & 0x1f;
+        for (; begin < frame.nalus.size(); ++begin) {
+            const unsigned int type = static_cast<unsigned char>(frame.nalus[begin][0]) & 0x1f;
             if (type != 7 && type != 8) {
-                nalus.push_back(frame->nalus[begin]);
+                nalus.push_back(std::move(frame.nalus[begin]));
             }
         }
-        frame->nalus = std::move(nalus);
+        frame.nalus = std::move(nalus);
     }
-    return frame;
+    return true;
 }
 
 bool H264MediaSource::ended() const {

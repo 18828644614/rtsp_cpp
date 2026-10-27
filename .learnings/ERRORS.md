@@ -281,3 +281,35 @@ LINK : fatal error LNK1168: 无法打开 D:\rtsp_learn\rtsp_cpp\build\Debug\rtsp
 - Tags: cmake, msvc, file-lock
 
 ---
+
+## [ERR-20261027-MT1] removed-transitive-include
+
+**Logged**: 2026-10-27
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### 摘要（Summary）
+移除 MediaTransport 包装后，media_session.h 原先依赖的间接头文件消失，首次构建失败；已补齐显式依赖并通过完整回归。
+
+### 原始错误（Error）
+```text
+error C2061: 语法错误: 标识符“TcpTransport”
+error C3861: “resolve_control_url”: 找不到标识符
+```
+
+### 上下文（Context）
+删除 media_transport.h/.cpp，RtpSender 不再间接包含 rtsp_session_utils.h；MediaSubscription 仍使用 TcpTransport。
+
+### 建议修复（Suggested Fix）
+使用某个类型或函数的文件直接包含其声明头；删除包装层时检查并消除间接包含依赖。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: src/media/media_session.h, src/rtp/rtp_sender.h
+
+### 解决情况（Resolution）
+- **Resolved**: 2026-10-27
+- **Notes**: 显式包含 rtsp_session_utils.h，Debug 构建、13 组 CTest 和外部 FFmpeg 解码验证全部通过。
+
+---

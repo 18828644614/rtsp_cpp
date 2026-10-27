@@ -39,8 +39,8 @@ void test_reader_and_payload() {
     check(reader.read(frame) && frame.pts == 0 && frame.duration == 1024
               && frame.data == std::string("\x11\x22\x33", 3), "ADTS header was not removed");
     const auto payload = rtsp::AacPacketizer().packetize(frame, track.clock_rate);
-    check(payload->payloads.size() == 1
-              && payload->payloads[0] == std::string("\0\x10\0\x18\x11\x22\x33", 7),
+    check(payload.payloads.size() == 1
+              && payload.payloads[0] == std::string("\0\x10\0\x18\x11\x22\x33", 7),
           "AAC-hbr fixed payload bytes do not match RFC layout");
     check(reader.read(frame) && frame.pts == 1024 && reader.ended(), "AAC PTS or EOF is wrong");
     check(!reader.read(frame) && frame.data.empty(), "AAC EOF returned stale data");

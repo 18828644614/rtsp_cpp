@@ -53,7 +53,6 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 六种请求、Session timeout、状态切换和错误响应 |
 | `src/rtsp/rtsp_server_connection.h/.cpp` | 单连接的协议状态、可读/可写处理、部分发送与排空关闭 |
-| `src/rtsp/media_transport.h/.cpp` | TCP interleaved Transport 封装，预留其他传输模式 |
 | `src/rtsp/rtsp_server.h/.cpp` | 统一事件循环、监听、媒体期限、连接管理和停止服务器 |
 | `src/rtsp/rtsp_client.h/.cpp` | 客户端顺序请求与响应校验 |
 | `src/app/client_main.cpp` | 建立连接，运行完整控制流程 |

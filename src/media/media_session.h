@@ -7,6 +7,7 @@
 #include "rtp/rtp_sender.h"
 #include "rtp/rtcp_packet.h"
 #include "media/media_clock.h"
+#include "rtsp/rtsp_session_utils.h"
 
 #include <chrono>
 #include <memory>
@@ -123,8 +124,9 @@ private:
     bool reset_clock_ = true;
     Clock::time_point clock_origin_{};
     std::optional<Clock::time_point> next_deadline_;
-    std::shared_ptr<const RtpPayloadUnit> video_;
-    std::shared_ptr<const RtpPayloadUnit> audio_;
+    // 各轨道保留一份待发负载，tick 内以常量引用同步分发，不转移所有权。
+    std::optional<RtpPayloadUnit> video_;
+    std::optional<RtpPayloadUnit> audio_;
 };
 
 }  // namespace rtsp

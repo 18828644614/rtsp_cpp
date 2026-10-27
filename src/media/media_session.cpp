@@ -1,4 +1,5 @@
 #include "media/media_session.h"
+#include "rtsp/rtsp_stream_parser.h"
 
 #include <chrono>
 #include <iostream>
@@ -30,7 +31,7 @@ void MediaSubscription::add_track(std::size_t index, const MediaTrack& track,
     state.transport = transport;
     state.control = track.control;
     state.clock_rate = track.clock_rate;
-    state.sender = std::make_unique<RtpSender>(MediaTransport(transport),
+    state.sender = std::make_unique<RtpSender>(transport.rtp_channel,
                                              track.payload_type, sequence, ssrc);
     tracks_.push_back(std::move(state));
     has_video_ = has_video_ || track.media_type == "video";
@@ -58,7 +59,8 @@ bool MediaSubscription::queue_report(TrackSender& track, bool final) {
     message.ssrc = track.sender->ssrc();
     message.final_rtcp = final;
     // 先占据准确的队列字节额度；连接真正发送本项时再填写计数与时间快照。
-    message.wire = MediaTransport(track.transport).frame_rtcp(
+    message.wire = serialize_interleaved_frame(
+        static_cast<unsigned int>(track.transport.rtcp_channel),
         make_rtcp_sender_report(message.ssrc, 0, 0, 0, 0, "rtsp-cpp", final));
     if (!queue_->push(std::move(message))) {
         failed_ = true;
@@ -130,7 +132,8 @@ std::string MediaSubscription::prepare_rtcp(const net::OutboundMessage& message,
                                             MediaClock::Clock::time_point now) const {
     for (const auto& track : tracks_) {
         if (track.sender->ssrc() == message.ssrc) {
-            return MediaTransport(track.transport).frame_rtcp(make_rtcp_sender_report(
+            return serialize_interleaved_frame(
+                static_cast<unsigned int>(track.transport.rtcp_channel), make_rtcp_sender_report(
                 message.ssrc, clock.ntp_at(now),
                 MediaClock::rtp_at(track.anchor_timestamp, track.anchor_time, track.clock_rate, now),
                 track.packets, track.octets, "rtsp-cpp", message.final_rtcp));
@@ -350,8 +353,8 @@ void MediaSession::tick(Clock::time_point now) {
 
             // 每条轨道只预读一帧，选择媒体时间更早的帧。负载只封装一次。
             if (!video_ && video_source_ && !video_source_->ended()) {
-                const auto frame = video_source_->read();
-                if (frame) {
+                H264AccessUnit frame;
+                if (video_source_->read(frame)) {
                     video_ = video_packetizer_.packetize_access_unit(frame);
                 }
             }
@@ -369,9 +372,9 @@ void MediaSession::tick(Clock::time_point now) {
             if (video_ && (!audio_ || video_->pts * audio_->clock_rate <= audio_->pts * video_->clock_rate)) {
                 send_video = true;
             }
-            const auto unit = send_video ? video_ : audio_;
+            const RtpPayloadUnit& unit = *(send_video ? video_ : audio_);
             const std::size_t track_index = send_video ? video_track_ : audio_track_;
-            const auto media_time = std::chrono::microseconds(unit->pts * 1000000 / unit->clock_rate);
+            const auto media_time = std::chrono::microseconds(unit.pts * 1000000 / unit.clock_rate);
             // clock_origin 表示：媒体时间0对应的时刻
             if (reset_clock_) {
                 clock_origin_ = now - media_time;
@@ -382,7 +385,7 @@ void MediaSession::tick(Clock::time_point now) {
                 return;
             }
             for (const auto& subscriber : subscribers) {
-                subscriber->deliver(track_index, *unit, *next_deadline_);
+                subscriber->deliver(track_index, unit, *next_deadline_);
             }
             if (send_video) {
                 video_.reset();

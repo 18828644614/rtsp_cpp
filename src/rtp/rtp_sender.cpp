@@ -1,15 +1,17 @@
 #include "rtp/rtp_sender.h"
+#include "rtsp/rtsp_stream_parser.h"
 
 #include <stdexcept>
 #include <utility>
 
 namespace rtsp {
 
-RtpSender::RtpSender(MediaTransport transport, int payload_type, std::uint16_t sequence,
+RtpSender::RtpSender(int rtp_channel, int payload_type, std::uint16_t sequence,
                      std::uint32_t ssrc)
-    : transport_(std::move(transport)), payload_type_(payload_type), sequence_(sequence),
+    : rtp_channel_(rtp_channel), payload_type_(payload_type), sequence_(sequence),
       ssrc_(ssrc) {
-    if (payload_type_ < 0 || payload_type_ > 127 || ssrc_ == 0) {
+    if (rtp_channel_ < 0 || rtp_channel_ > 255
+        || payload_type_ < 0 || payload_type_ > 127 || ssrc_ == 0) {
         throw std::invalid_argument("invalid RTP sender parameters");
     }
 }
@@ -32,7 +34,8 @@ bool RtpSender::send_payloads(const RtpPayloadUnit& unit, std::uint32_t timestam
         message.kind = net::OutboundKind::Rtp;
         message.ssrc = ssrc_;
         message.rtp_payload_bytes = packet.payload.size();
-        message.wire = transport_.frame_rtp(serialize_rtp_packet(packet));
+        message.wire = serialize_interleaved_frame(
+            static_cast<unsigned int>(rtp_channel_), serialize_rtp_packet(packet));
         if (!queue.push(std::move(message))) {
             return false;
         }

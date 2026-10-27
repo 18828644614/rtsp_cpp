@@ -90,6 +90,8 @@ RTSP 响应、RTP 和 RTCP 均经过同一条有序队列。默认每连接上�
 
 `tick(now)` 清理失效订阅，预读每轨道一帧，按 `pts / clock_rate` 选择时间更早的帧：到期则分发，未到期则记录期限并返回。每轮最多推进 32 个 AU，积压媒体会分轮处理。
 
+AU 通过输出参数读取，Packetizer 接收常量引用并按值返回 `RtpPayloadUnit`；视频、音频待发负载各由一个 `optional<RtpPayloadUnit>` 持有。同步分发时使用常量引用，每帧仍只封包一次，未到期时保留负载。RTP/RTCP 直接使用 SETUP 协商的通道调用 `serialize_interleaved_frame()`，不经过额外传输包装类。
+
 无有效订阅时暂停并清空下一期限，保留预读数据和读取位置。新订阅加入后重建单调时钟起点，避免将空闲期间的媒体集中突发发送。视频订阅仍等待 IDR；每轨道 EOF 独立处理，所有轨道结束后将最终 RTCP 入队并关闭订阅队列。
 
 `MediaSession` 由事件循环单线程访问，外部线程不能直接调用其 tick、subscribe 或 stop；跨线程停止服务器使用 `RtspServer::stop()`。

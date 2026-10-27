@@ -2,7 +2,6 @@
 #include "media/h264_packetizer.h"
 #include "net/outbound_queue.h"
 #include "rtp/rtp_sender.h"
-#include "rtsp/media_transport.h"
 #include "rtsp/rtsp_stream_parser.h"
 
 #include <iostream>
@@ -47,16 +46,13 @@ void test_queue() {
 }
 
 void test_sender() {
-    rtsp::TcpTransport tcp;
-    tcp.rtp_channel = 6;
-    tcp.rtcp_channel = 7;
-    rtsp::RtpSender sender(rtsp::MediaTransport(tcp), 96, 100, 0x12345678);
-    auto access_unit = std::make_shared<rtsp::H264AccessUnit>();
-    access_unit->pts = 9000;
-    access_unit->nalus.push_back(std::string("\x65", 1) + std::string(1500, 'x'));
+    rtsp::RtpSender sender(6, 96, 100, 0x12345678);
+    rtsp::H264AccessUnit access_unit;
+    access_unit.pts = 9000;
+    access_unit.nalus.push_back(std::string("\x65", 1) + std::string(1500, 'x'));
     const auto unit = rtsp::H264Packetizer().packetize_access_unit(access_unit);
     rtsp::net::OutboundQueue queue(10000);
-    check(sender.send_payloads(*unit, 0, queue), "RTP sender rejected access unit");
+    check(sender.send_payloads(unit, 0, queue), "RTP sender rejected access unit");
 
     rtsp::net::OutboundMessage first;
     rtsp::net::OutboundMessage second;

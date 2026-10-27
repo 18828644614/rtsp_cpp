@@ -4,7 +4,6 @@
 #include "rtp/rtp_payload.h"
 
 #include <cstddef>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -12,8 +11,7 @@ namespace rtsp {
 
 class H264Packetizer {
 public:
-    std::shared_ptr<const RtpPayloadUnit> packetize_access_unit(
-        std::shared_ptr<const H264AccessUnit> access_unit) const;
+    RtpPayloadUnit packetize_access_unit(const H264AccessUnit& access_unit) const;
 
     // 输入一个 NALU：包含 NAL 头，不包含 Annex-B 起始码。
     // 输出各 RTP 包中的 H.264 负载，不包含 RTP 头或 TCP 交织头。

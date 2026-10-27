@@ -3,7 +3,6 @@
 #include "media/h264_file_reader.h"
 #include "sdp/session_description.h"
 
-#include <memory>
 #include <string>
 
 namespace rtsp {
@@ -14,7 +13,7 @@ public:
     explicit H264MediaSource(const std::string& path);
 
     const SessionDescription& description() const;
-    std::shared_ptr<const H264AccessUnit> read();
+    bool read(H264AccessUnit& frame);
     bool ended() const;
 
 private:

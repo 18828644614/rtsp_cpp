@@ -22,7 +22,6 @@ add_library(rtsp_core STATIC
     src/rtsp/rtsp_server_session.cpp
     src/rtsp/rtsp_server.cpp
     src/rtsp/rtsp_server_connection.cpp
-    src/rtsp/media_transport.cpp
     src/rtsp/rtsp_client.cpp
     src/sdp/session_description.cpp
     src/rtp/rtp_packet.cpp
