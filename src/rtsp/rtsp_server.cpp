@@ -3,6 +3,8 @@
 #include "media/media_session.h"
 #include "rtsp/rtsp_server_connection.h"
 
+#include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #include <utility>
@@ -16,108 +18,122 @@ RtspServer::RtspServer(std::string address, std::uint16_t port, std::string vide
 
 RtspServer::~RtspServer() {
     stop();
-    stop_connections();
-    listener_.close();
+    // 调用者须先等待 run() 返回；对象不能在运行线程仍访问它时析构。
+    close_connections();
 }
 
 void RtspServer::run() {
-    if (listener_.is_open()) {
+    // 把 running_ 设置为 true
+    // 返回设置之前的值
+    if (running_.exchange(true)) {
         throw std::logic_error("server is already running");
     }
-    stopping_.store(false, std::memory_order_release);
-    listener_.listen(address_, port_);
-    std::cout << "RTSP server listening on " << address_ << ':'
-              << listener_.local_port() << std::endl;
-
+    stopping_.store(false);
     try {
-        while (!stopping_.load(std::memory_order_acquire)) {
-            // 删除已经断开的连接
+        listener_.listen(address_, port_);
+        listener_.set_nonblocking();
+        bound_port_.store(listener_.local_port());
+        std::cout << "RTSP server listening on " << address_ << ':'
+                  << bound_port_.load() << std::endl;
+        while (!stopping_.load()) {
+            const auto now = MediaSession::Clock::now();
+            media_session_->tick(now);
+            for (auto& connection : connections_) {
+                connection->check_timeout(now);
+            }
             reap_finished_connections();
-            if (!listener_.wait_readable(100)) {
-                continue;
+
+            event_loop_.clear();
+            // 监听socket
+            event_loop_.watch(listener_.native_handle(), true, false);
+            for (const auto& connection : connections_) {
+                event_loop_.watch(connection->native_handle(),
+                                  connection->wants_read(), connection->wants_write());
             }
 
-            // 创建一个新的客户端连接对象，让它使用已经存在的媒体会话，再用 unique_ptr 管理这个连接对象
-            auto connection = std::make_unique<RtspServerConnection>(media_session_);
-            //  连接 A
-            //   ├── media_session_ ───────┐
-            //   └── outbound_queue_ → 队列 A
-            //                            │
-            //                            ▼
-            //                     同一个 MediaSession
-            //                            ▲
-            //                            │
-            // 连接 B                     │
-            //   ├── media_session_ ───────┘
-            //   └── outbound_queue_ → 队列 B
-
-            // 从监听 Socket 接收一个客户端连接
-            connection->accept_from(listener_);
-            std::cout << "Client connected, Session=" << connection->session_id() << std::endl;
-            connection->start();
-            {
-                std::lock_guard<std::mutex> lock(connections_mutex_);
-                if (stopping_.load(std::memory_order_acquire)) {
-                    connection->stop();
+            // 最多等待 50 ms，外部 stop() 只设标记，无需跨线程操作 Socket。
+            int timeout_ms = 50;
+            if (const auto deadline = media_session_->next_deadline()) {
+                const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+                    *deadline - MediaSession::Clock::now()).count();
+                timeout_ms = static_cast<int>(std::clamp<long long>(remaining, 0, timeout_ms));
+            }
+            const auto events = event_loop_.wait(timeout_ms);
+            if (stopping_.load()) {
+                break;
+            }
+            for (const auto& event : events) {
+                if (event.socket == listener_.native_handle()) {
+                    // 限制每轮 accept 数量，避免连接洪峰挤占已有连接。
+                    for (int accepted = 0; accepted < 16; ++accepted) {
+                        auto connection = std::make_unique<RtspServerConnection>(media_session_);
+                        if (!connection->accept_from(listener_)) {
+                            break;
+                        }
+                        if (connections_.size() >= net::EventLoop::capacity - 1) {
+                            connection->close();  // 监听 Socket 也占一个 select 名额。
+                            continue;
+                        }
+                        std::cout << "Client connected, Session=" << connection->session_id()
+                                  << std::endl;
+                        connections_.push_back(std::move(connection));
+                        connection_count_.store(connections_.size());
+                    }
+                    continue;
                 }
-                // 把连接对象的所有权交给服务器的连接容器
-                connections_.push_back(std::move(connection));
+                for (auto& connection : connections_) {
+                    if (connection->finished() || connection->native_handle() != event.socket) {
+                        continue;
+                    }
+                    if (event.readable) {
+                        connection->on_readable();
+                    }
+                    if (event.writable && !connection->finished()) {
+                        connection->on_writable();
+                    }
+                    break;
+                }
             }
+            // 不在事件分派中销毁连接，避免同批事件引用失效。
+            reap_finished_connections();
         }
-    } catch (const std::exception&) {
-        if (!stopping_.load(std::memory_order_acquire)) {
-            stop_connections();
-            listener_.close();
-            media_session_->stop();
-            throw;
-        }
+    } catch (...) {
+        listener_.close();
+        close_connections();
+        media_session_->stop();
+        running_.store(false);
+        throw;
     }
-
     listener_.close();
-    stop_connections();
+    close_connections();
     media_session_->stop();
+    running_.store(false);
 }
 
 void RtspServer::stop() {
-    stopping_.store(true, std::memory_order_release);
-    // 监听线程最多 100 ms 后观察停止标志，再由该线程关闭监听句柄。
-    std::lock_guard<std::mutex> lock(connections_mutex_);
-    for (std::size_t index = 0; index < connections_.size(); ++index) {
-        connections_[index]->stop();
-    }
+    stopping_.store(true);
 }
 
 std::uint16_t RtspServer::local_port() const {
-    return listener_.local_port();
+    return bound_port_.load();
 }
 
 std::size_t RtspServer::connection_count() const {
-    std::lock_guard<std::mutex> lock(connections_mutex_);
-    return connections_.size();
+    return connection_count_.load();
 }
 
 void RtspServer::reap_finished_connections() {
-    std::lock_guard<std::mutex> lock(connections_mutex_);
-    std::size_t index = 0;
-    while (index < connections_.size()) {
-        if (!connections_[index]->finished()) {
-            ++index;
-            continue;
-        }
-        connections_[index]->join();
-        connections_.erase(connections_.begin() + static_cast<std::ptrdiff_t>(index));
-    }
+    connections_.erase(std::remove_if(connections_.begin(), connections_.end(),
+        [](const auto& connection) { return connection->finished(); }), connections_.end());
+    connection_count_.store(connections_.size());
 }
 
-void RtspServer::stop_connections() {
-    std::lock_guard<std::mutex> lock(connections_mutex_);
-    for (std::size_t index = 0; index < connections_.size(); ++index) {
-        connections_[index]->stop();
-    }
-    for (std::size_t index = 0; index < connections_.size(); ++index) {
-        connections_[index]->join();
+void RtspServer::close_connections() {
+    for (auto& connection : connections_) {
+        connection->close();
     }
     connections_.clear();
+    connection_count_.store(0);
 }
 
 }  // namespace rtsp

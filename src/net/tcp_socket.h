@@ -8,6 +8,13 @@
 
 namespace rtsp::net {
 
+enum class IoStatus { Done, WouldBlock, Eof };
+
+struct IoResult {
+    IoStatus status = IoStatus::WouldBlock;
+    std::size_t bytes = 0;
+};
+
 // 一个对象管理一个 Socket 句柄。
 // 服务器需要两个对象：一个负责监听，一个负责与客户端通信。
 class TcpSocket {
@@ -27,6 +34,13 @@ public:
 
     // 在监听对象上调用，把新连接保存到 client 中。client 必须是空对象。
     void accept_client(TcpSocket& client);
+
+    // 服务器使用非阻塞接口；WouldBlock 表示稍后重试，不是 EOF。
+    void set_nonblocking(bool enabled = true);
+    bool try_accept(TcpSocket& client);
+    IoResult receive_some(char* buffer, std::size_t capacity);
+    IoResult send_some(const char* data, std::size_t size);
+    SOCKET native_handle() const;
 
     // 完整发送；一次接收最多返回 capacity 字节，0 表示对端发送结束。
     void send_all(const char* data, std::size_t size);

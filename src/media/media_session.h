@@ -6,11 +6,11 @@
 #include "media/h264_packetizer.h"
 #include "rtp/rtp_sender.h"
 
-#include <condition_variable>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
+#include <optional>
 #include <vector>
 
 namespace rtsp {
@@ -58,9 +58,10 @@ enum class SubscribeResult {
     QueueClosed
 };
 
-// 一个资源、一个调度线程、共享音视频进度。空路径表示不启用对应轨道。
+// 一个资源、共享音视频进度；只能由所属事件循环线程推进。空路径关闭对应轨道。
 class MediaSession {
 public:
+    using Clock = std::chrono::steady_clock;
     explicit MediaSession(const std::string& video_path, const std::string& audio_path = "");
     ~MediaSession();
 
@@ -69,9 +70,14 @@ public:
                               const std::string& play_response, bool from_start = false);
     bool ended() const;
     void stop();
+    
+    // 判断现在是否有媒体需要发送。
+    // 读取并封装下一份音频或视频。
+    // 把 RTP 数据放入订阅者的 OutboundQueue。
+    void tick(Clock::time_point now);
+    std::optional<Clock::time_point> next_deadline() const;
 
 private:
-    void run();
     void finish(bool failed);
 
     SessionDescription description_;
@@ -82,13 +88,14 @@ private:
     std::size_t video_track_ = 0;
     std::size_t audio_track_ = 0;
 
-    mutable std::mutex mutex_;
-    std::condition_variable condition_;
     std::vector<std::weak_ptr<MediaSubscription>> subscribers_;
     bool started_ = false;
     bool ended_ = false;
-    bool stopping_ = false;
-    std::thread worker_;
+    bool reset_clock_ = true;
+    Clock::time_point clock_origin_{};
+    std::optional<Clock::time_point> next_deadline_;
+    std::shared_ptr<const RtpPayloadUnit> video_;
+    std::shared_ptr<const RtpPayloadUnit> audio_;
 };
 
 }  // namespace rtsp

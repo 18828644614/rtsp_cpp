@@ -1,3 +1,4 @@
+#include "event_test_driver.h"
 #include "media/media_session.h"
 #include "rtsp/rtsp_server_connection.h"
 #include "rtsp/rtsp_server_session.h"
@@ -82,12 +83,13 @@ bool pop(Peer& peer, rtsp::net::OutboundMessage& message) {
     const auto deadline = Clock::now() + std::chrono::seconds(3);
     while (peer.queue->bytes() == 0 && !peer.queue->closed()) {
         check(Clock::now() < deadline, "multitrack queue timed out");
+        test::pump();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return peer.queue->pop(message);
 }
 
-void play(rtsp::MediaSession& media, Peer& peer) {
+void play(test::DrivenMedia& media, Peer& peer) {
     check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
           "multitrack PLAY failed");
     rtsp::net::OutboundMessage response;
@@ -149,7 +151,7 @@ void check_packets(const std::vector<Packet>& packets, int video_count, int audi
 
 void test_shared_tracks_and_late_join() {
     save_samples(24, 60);
-    rtsp::MediaSession media(video_path, audio_path);
+    test::DrivenMedia media(video_path, audio_path);
     check(std::remove(video_path.c_str()) == 0 && std::remove(audio_path.c_str()) == 0,
           "shared files were not closed after initial load");
     Peer first(media.description());
@@ -199,7 +201,7 @@ void test_shared_tracks_and_late_join() {
 
 void test_cancel_and_no_later_idr() {
     save_samples(8, 20, 1);
-    rtsp::MediaSession media(video_path, audio_path);
+    test::DrivenMedia media(video_path, audio_path);
     Peer cancelled(media.description());
     play(media, cancelled);
     Peer healthy(media.description(), true, true, 6, 41);
@@ -211,7 +213,7 @@ void test_cancel_and_no_later_idr() {
           "cancelled subscription received more media or lost its response queue");
 
     save_samples(8, 20, 100);
-    rtsp::MediaSession no_idr(video_path, audio_path);
+    test::DrivenMedia no_idr(video_path, audio_path);
     Peer first(no_idr.description());
     play(no_idr, first);
     for (;;) {
@@ -229,11 +231,11 @@ void test_cancel_and_no_later_idr() {
 
 void test_track_selection_and_short_audio() {
     save_samples(8, 3);
-    rtsp::MediaSession media(video_path, audio_path);
+    test::DrivenMedia media(video_path, audio_path);
     Peer video_only(media.description(), true, false);
     play(media, video_only);
     check_packets(collect(video_only), 8, 0, 0, 31);
-    rtsp::MediaSession audio_selection(video_path, audio_path);
+    test::DrivenMedia audio_selection(video_path, audio_path);
     Peer audio_only(audio_selection.description(), false, true);
     play(audio_selection, audio_only);
     // 音频订阅无需等待视频 IDR；这里与视频一起从时间零点启动。
@@ -244,7 +246,7 @@ void test_track_selection_and_short_audio() {
                   && audio[i].rtp.timestamp == i * 1024, "audio-only track used video clock");
     }
 
-    rtsp::MediaSession pure_audio("", audio_path);
+    test::DrivenMedia pure_audio("", audio_path);
     Peer peer(pure_audio.description(), false, true);
     play(pure_audio, peer);
     const auto packets = collect(peer);
@@ -258,7 +260,8 @@ rtsp::RtspStreamItem receive_item(rtsp::net::TcpSocket& socket, rtsp::RtspStream
     const auto deadline = Clock::now() + std::chrono::seconds(3);
     while (!parser.next(item)) {
         check(Clock::now() < deadline, "TCP multitrack response timed out");
-        if (socket.wait_readable(20)) {
+        test::pump();
+        if (socket.wait_readable(5)) {
             char buffer[4096];
             const auto count = socket.receive(buffer, sizeof(buffer));
             check(count != 0, "TCP ended before expected response");
@@ -282,14 +285,14 @@ rtsp::RtspMessage exchange(rtsp::net::TcpSocket& socket, rtsp::RtspStreamParser&
 
 void test_tcp_two_setup_and_media() {
     save_samples(8, 20);
-    auto media = std::make_shared<rtsp::MediaSession>(video_path, audio_path);
+    auto media = std::make_shared<test::DrivenMedia>(video_path, audio_path);
     rtsp::net::TcpSocket listener;
     listener.listen("127.0.0.1", 0);
     rtsp::net::TcpSocket socket;
     socket.connect("127.0.0.1", listener.local_port());
-    rtsp::RtspServerConnection connection(media);
+    test::DrivenConnection connection(media);
     connection.accept_from(listener);
-    connection.start();
+
     rtsp::RtspStreamParser parser;
     const auto describe = exchange(socket, parser, "DESCRIBE", "", 1);
     check(describe.status_code == 200 && rtsp::parse_sdp(describe.body).tracks.size() == 2,
@@ -323,7 +326,8 @@ void test_tcp_two_setup_and_media() {
             packets.push_back(packet);
         }
         check(Clock::now() < deadline, "TCP media did not finish");
-        if (!socket.wait_readable(20)) {
+        test::pump();
+        if (!socket.wait_readable(5)) {
             continue;
         }
         const auto count = socket.receive(buffer, sizeof(buffer));
@@ -333,7 +337,7 @@ void test_tcp_two_setup_and_media() {
         parser.append(buffer, count);
     }
     parser.finish();
-    connection.join();
+    test::wait_finished(connection);
     check(connection.finished() && !packets.empty(), "connection did not release after EOF");
     check_packets(packets, 8, 20, 6, packets[0].rtp.ssrc);
 }
@@ -341,15 +345,15 @@ void test_tcp_two_setup_and_media() {
 // FFmpeg/ffplay 通过 Range: npt=0.000- 请求 PLAY；晚加入者仍应加入共享进度。
 void test_tcp_zero_range_late_join() {
     save_samples(12, 0);
-    auto media = std::make_shared<rtsp::MediaSession>(video_path, "");
+    auto media = std::make_shared<test::DrivenMedia>(video_path, "");
     rtsp::net::TcpSocket listener;
     listener.listen("127.0.0.1", 0);
 
     rtsp::net::TcpSocket first_socket;
     first_socket.connect("127.0.0.1", listener.local_port());
-    rtsp::RtspServerConnection first_connection(media);
+    test::DrivenConnection first_connection(media);
     first_connection.accept_from(listener);
-    first_connection.start();
+
     rtsp::RtspStreamParser first_parser;
     check(exchange(first_socket, first_parser, "DESCRIBE", "", 1).status_code == 200,
           "first DESCRIBE failed");
@@ -364,9 +368,9 @@ void test_tcp_zero_range_late_join() {
 
     rtsp::net::TcpSocket second_socket;
     second_socket.connect("127.0.0.1", listener.local_port());
-    rtsp::RtspServerConnection second_connection(media);
+    test::DrivenConnection second_connection(media);
     second_connection.accept_from(listener);
-    second_connection.start();
+
     rtsp::RtspStreamParser second_parser;
     check(exchange(second_socket, second_parser, "DESCRIBE", "", 1).status_code == 200,
           "second DESCRIBE failed");
@@ -378,10 +382,10 @@ void test_tcp_zero_range_late_join() {
     check(exchange(second_socket, second_parser, "PLAY", "", 3, second_session).status_code == 200,
           "zero-start Range rejected for a late client");
 
-    second_connection.stop();
-    second_connection.join();
-    first_connection.stop();
-    first_connection.join();
+    second_connection.close();
+    test::wait_finished(second_connection);
+    first_connection.close();
+    test::wait_finished(first_connection);
     media->stop();
 }
 

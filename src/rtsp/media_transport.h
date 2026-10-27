@@ -10,7 +10,7 @@ enum class TransportMode {
     InterleavedTcp
 };
 
-// 阶段 2 的统一传输值对象。实际写 Socket 仍由连接的唯一发送线程负责。
+// 统一传输值对象。实际写 Socket 由事件循环中的连接 on_writable 负责。
 class MediaTransport {
 public:
     explicit MediaTransport(TcpTransport tcp_transport);

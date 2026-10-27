@@ -109,7 +109,7 @@ void MediaSubscription::finish(bool failed) {
         std::cout << "Subscription ended before an IDR became available" << std::endl;
     }
     active_ = false;
-    // 正常 EOF 允许发送线程排空队列；异常由连接线程中断。
+    // 正常 EOF 允许事件循环排空队列；异常由连接处理路径中断。
     queue_->close();
 }
 
@@ -129,7 +129,6 @@ MediaSession::MediaSession(const std::string& video_path, const std::string& aud
     if (description_.tracks.empty()) {
         throw std::invalid_argument("provide a video or audio file");
     }
-    worker_ = std::thread(&MediaSession::run, this);
 }
 
 MediaSession::~MediaSession() {
@@ -145,12 +144,17 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
     if (!subscription) {
         throw std::invalid_argument("expected a media subscription");
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (ended_ || stopping_) {
+    if (ended_) {
         return SubscribeResult::Ended;
     }
     if (from_start && started_) {
         return SubscribeResult::InvalidRange;
+    }
+    bool had_active = false;
+    for (const auto& weak : subscribers_) {
+        if (auto existing = weak.lock()) {
+            had_active = had_active || !existing->finished();
+        }
     }
     // 先注册，再入队；分配失败时不会先发出成功响应。
     subscribers_.push_back(subscription);
@@ -159,35 +163,32 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
         return SubscribeResult::QueueClosed;
     }
 
-    // 媒体线程可能因为没有订阅者而处于等待状态。现在有订阅加入了，就通知它重新检查并继续工作
-    condition_.notify_one();
+    if (!had_active) {
+        reset_clock_ = true;
+        next_deadline_ = Clock::now();
+    }
     return SubscribeResult::Started;
 }
 
 bool MediaSession::ended() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return ended_;
 }
 
 void MediaSession::stop() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
-    }
-    // 通知的是 work_ 线程
-    condition_.notify_one();
-    if (worker_.joinable()) {
-        worker_.join();
-    }
+    finish(false);
+}
+
+std::optional<MediaSession::Clock::time_point> MediaSession::next_deadline() const {
+    return next_deadline_;
 }
 
 void MediaSession::finish(bool failed) {
+    ended_ = true;
+    next_deadline_.reset();
+    video_.reset();
+    audio_.reset();
     std::vector<std::weak_ptr<MediaSubscription>> subscribers;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ended_ = true;
-        subscribers.swap(subscribers_);
-    }
+    subscribers.swap(subscribers_);
     for (const auto& weak : subscribers) {
         if (auto subscriber = weak.lock()) {
             subscriber->finish(failed);
@@ -195,86 +196,86 @@ void MediaSession::finish(bool failed) {
     }
 }
 
-void MediaSession::run() {
-    using Clock = std::chrono::steady_clock;
-    auto clock_origin = Clock::now();
-    bool reset_clock = true;
-    std::shared_ptr<const RtpPayloadUnit> video;
-    std::shared_ptr<const RtpPayloadUnit> audio;
+void MediaSession::tick(Clock::time_point now) {
+    if (ended_) {
+        return;
+    }
     try {
-        for (;;) {
+        // 单轮最多推进 32 个 AU，媒体落后时也要让出网络处理机会。
+        // AU 可以理解为一份完整的编码媒体单元：
+        // - H.264 通常是一帧访问单元；
+        // - AAC 通常是一帧音频访问单元。
+        // 设置 32 的目的，是防止媒体落后时，tick() 一直处理媒体而不返回，导致网络事件得不到处理
+        for (int budget = 0; budget < 32; ++budget) {
             std::vector<std::shared_ptr<MediaSubscription>> subscribers;
-            {
-                std::unique_lock<std::mutex> lock(mutex_);
-                auto it = subscribers_.begin();
-                while (it != subscribers_.end()) {
-                    auto subscriber = it->lock();
-                    if (!subscriber || subscriber->finished()) {
-                        it = subscribers_.erase(it);
-                    } else {
-                        subscribers.push_back(std::move(subscriber));
-                        ++it;
-                    }
+            auto it = subscribers_.begin();
+            while (it != subscribers_.end()) {
+                auto subscriber = it->lock();
+                if (!subscriber || subscriber->finished()) {
+                    it = subscribers_.erase(it);
+                } else {
+                    subscribers.push_back(std::move(subscriber));
+                    ++it;
                 }
-                if (stopping_) {
-                    break;
-                }
-                if (subscribers.empty()) {
-                    condition_.wait(lock, [this] { return stopping_ || !subscribers_.empty(); });
-                    reset_clock = true;
-                    continue;
-                }
-                started_ = true;
             }
+            if (subscribers.empty()) {
+                // 表示以后有新订阅加入时，需要重新建立媒体时钟起点
+                reset_clock_ = true;
+                // 表示当前没有下一帧的发送期限。
+                next_deadline_.reset();
+                return;
+            }
+            started_ = true;
 
             // 每条轨道只预读一帧，选择媒体时间更早的帧。负载只封装一次。
-            if (!video && video_source_ && !video_source_->ended()) {
+            if (!video_ && video_source_ && !video_source_->ended()) {
                 const auto frame = video_source_->read();
                 if (frame) {
-                    video = video_packetizer_.packetize_access_unit(frame);
+                    video_ = video_packetizer_.packetize_access_unit(frame);
                 }
             }
-            if (!audio && audio_source_ && !audio_source_->ended()) {
+            if (!audio_ && audio_source_ && !audio_source_->ended()) {
                 AacAccessUnit frame;
                 if (audio_source_->read(frame)) {
-                    audio = audio_packetizer_.packetize(frame, audio_source_->track().clock_rate);
+                    audio_ = audio_packetizer_.packetize(frame, audio_source_->track().clock_rate);
                 }
             }
-            if (!video && !audio) {
-                break;
+            if (!video_ && !audio_) {
+                finish(false);
+                return;
             }
             bool send_video = false;
-            if (video && (!audio || video->pts * audio->clock_rate <= audio->pts * video->clock_rate)) {
+            if (video_ && (!audio_ || video_->pts * audio_->clock_rate <= audio_->pts * video_->clock_rate)) {
                 send_video = true;
             }
-            const auto unit = send_video ? video : audio;
+            const auto unit = send_video ? video_ : audio_;
             const std::size_t track_index = send_video ? video_track_ : audio_track_;
             const auto media_time = std::chrono::microseconds(unit->pts * 1000000 / unit->clock_rate);
-            if (reset_clock) {
-                clock_origin = Clock::now() - media_time;
-                reset_clock = false;
+            // clock_origin 表示：媒体时间0对应的时刻
+            if (reset_clock_) {
+                clock_origin_ = now - media_time;
+                reset_clock_ = false;
             }
-            const auto deadline = clock_origin + media_time;
-            if (Clock::now() < deadline) {
-                std::unique_lock<std::mutex> lock(mutex_);
-                condition_.wait_until(lock, deadline);
-                continue;  // 等待后重新获取订阅快照，并检查停止状态。
+            next_deadline_ = clock_origin_ + media_time;
+            if (now < *next_deadline_) {
+                return;
             }
             for (const auto& subscriber : subscribers) {
                 subscriber->deliver(track_index, *unit);
             }
             if (send_video) {
-                video.reset();
+                video_.reset();
             } else {
-                audio.reset();
+                audio_.reset();
             }
             // 一条轨道 EOF 不关闭连接；两条轨道均发送完才统一结束。
-            if (!video && !audio && (!video_source_ || video_source_->ended())
+            if (!video_ && !audio_ && (!video_source_ || video_source_->ended())
                 && (!audio_source_ || audio_source_->ended())) {
-                break;
+                finish(false);
+                return;
             }
         }
-        finish(false);
+        next_deadline_ = now;
     } catch (const std::exception& error) {
         std::cerr << "MediaSession error: " << error.what() << '\n';
         finish(true);

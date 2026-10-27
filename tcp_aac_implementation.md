@@ -1,5 +1,7 @@
 # TCP 多轨道与 AAC：实现说明
 
+阶段 6 已将下述媒体与连接逻辑迁移到同一个 select 事件循环，详见 [事件循环实现说明](event_loop_implementation.md)。轨道、时间线和封包规则保持不变。
+
 ## 1. 框架
 
 ```text
@@ -12,13 +14,13 @@ RtspServer
         ├── 客户端 A
         │   ├── 视频 RtpSender ─┐
         │   ├── 音频 RtpSender ─┤
-        │   └── OutboundQueue ←─┘ → 原有发送线程 → TCP
-        └── 客户端 B：独立 Sender、队列和发送线程
+        │   └── OutboundQueue ←─┘ → on_writable → TCP
+        └── 客户端 B：独立 Sender、队列和发送进度
 ```
 
 每个文件启动时只加载一次，每帧负载只封装一次。每个客户端只为自己 SETUP 的轨道建立 Sender。
 
-使用普通结构体、函数、循环和现有的智能指针、互斥锁、线程。不新增继承、回调、模板框架或事件循环。
+使用普通结构体、函数、循环和现有的智能指针。阶段 6 新增一个小型 EventLoop；媒体与连接均不再创建后台线程，不引入继承、回调或模板框架。
 
 ## 2. 五处修改
 
@@ -128,7 +130,7 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 2. `src/rtsp/rtsp_server_session.cpp`：如何分别 SETUP。
 3. `src/media/aac_file_reader.cpp`、`aac_packetizer.cpp`：AAC 怎样读取和封包。
 4. `src/rtp/rtp_payload.h`、`rtp_sender.cpp`：公共负载怎样成为 TCP RTP 包。
-5. `src/media/media_session.cpp`：先看 `MediaSubscription::deliver()`，再看 `MediaSession::run()`。
+5. `src/media/media_session.cpp`：先看 `MediaSubscription::deliver()`，再看 `MediaSession::tick()`。
 6. `src/rtsp/rtsp_server_connection.cpp`：PLAY 时怎样为已 SETUP 的轨道建立订阅。
 
 测试覆盖 AAC 固定字节、ADTS 边界、双轨道 SDP、不同 SETUP 顺序、通道冲突、独立 RTP 状态、统一时间线、晚加入、取消、纯音频和不同轨道 EOF。已有单视频测试继续保留。

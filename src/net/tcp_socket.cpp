@@ -1,4 +1,5 @@
 #include "net/tcp_socket.h"
+#include "net/event_loop.h"
 
 #include <stdexcept>
 
@@ -125,6 +126,95 @@ void TcpSocket::send_all(const char* data, std::size_t size) {
     }
 }
 
+void TcpSocket::set_nonblocking(bool enabled) {
+    if (!is_open()) {
+        throw std::logic_error("nonblocking requires an open socket");
+    }
+    u_long mode = enabled ? 1 : 0;
+    if (::ioctlsocket(handle_, FIONBIO, &mode) == SOCKET_ERROR) {
+        detail::throw_socket_error("ioctlsocket(FIONBIO)", WSAGetLastError());
+    }
+}
+
+bool TcpSocket::try_accept(TcpSocket& client) {
+    if (!is_open() || client.is_open()) {
+        throw std::logic_error("accept requires listener and empty client");
+    }
+    for (;;) {
+        client.handle_ = ::accept(handle_, nullptr, nullptr);
+        if (client.is_open()) {
+            try {
+                client.set_nonblocking();
+            } catch (...) {
+                client.close();
+                throw;
+            }
+            return true;
+        }
+        const int error = WSAGetLastError();
+        if (error == WSAEWOULDBLOCK || error == WSAECONNRESET || error == WSAECONNABORTED) {
+            // 待接受的连接可能已被对端复位，留到下一轮接受其他连接。
+            return false;
+        }
+        if (error != WSAEINTR) {
+            detail::throw_socket_error("accept", error);
+        }
+    }
+}
+
+IoResult TcpSocket::receive_some(char* buffer, std::size_t capacity) {
+    if (!is_open() || buffer == nullptr || capacity == 0) {
+        throw std::invalid_argument("receive_some requires open socket and buffer");
+    }
+    const int length = capacity > 65536 ? 65536 : static_cast<int>(capacity);
+    for (;;) {
+        const int count = ::recv(handle_, buffer, length, 0);
+        if (count > 0) {
+            return {IoStatus::Done, static_cast<std::size_t>(count)};
+        }
+        if (count == 0) {
+            return {IoStatus::Eof, 0};
+        }
+        const int error = WSAGetLastError();
+        if (error == WSAEWOULDBLOCK) {
+            return {IoStatus::WouldBlock, 0};
+        }
+        if (error != WSAEINTR) {
+            detail::throw_socket_error("recv", error);
+        }
+    }
+}
+
+IoResult TcpSocket::send_some(const char* data, std::size_t size) {
+    if (!is_open() || (data == nullptr && size != 0)) {
+        throw std::invalid_argument("send_some requires open socket and valid data");
+    }
+    if (size == 0) {
+        return {IoStatus::Done, 0};
+    }
+    const int length = size > 65536 ? 65536 : static_cast<int>(size);
+    for (;;) {
+        const int count = ::send(handle_, data, length, 0);
+        if (count > 0) {
+            return {IoStatus::Done, static_cast<std::size_t>(count)};
+        }
+        if (count == 0) {
+            throw std::runtime_error("send made no progress");
+        }
+        const int error = WSAGetLastError();
+        if (error == WSAEWOULDBLOCK) {
+            return {IoStatus::WouldBlock, 0};
+        }
+        if (error != WSAEINTR) {
+            detail::throw_socket_error("send", error);
+        }
+    }
+}
+
+SOCKET TcpSocket::native_handle() const {
+    return handle_;
+}
+
 std::size_t TcpSocket::receive(char* buffer, std::size_t capacity) {
     if (!is_open()) {
         throw std::logic_error("receiving socket is closed");
@@ -151,22 +241,9 @@ bool TcpSocket::wait_readable(int timeout_ms) {
     if (!is_open() || timeout_ms < 0) {
         throw std::invalid_argument("wait_readable requires an open socket and nonnegative timeout");
     }
-    for (;;) {
-        fd_set sockets;
-        FD_ZERO(&sockets);
-        FD_SET(handle_, &sockets);
-        timeval timeout{};
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
-        const int result = ::select(0, &sockets, nullptr, nullptr, &timeout);
-        if (result != SOCKET_ERROR) {
-            return result > 0;
-        }
-        const int error = WSAGetLastError();
-        if (error != WSAEINTR) {
-            detail::throw_socket_error("select", error);
-        }
-    }
+    EventLoop loop;
+    loop.watch(handle_, true, false);
+    return !loop.wait(timeout_ms).empty();
 }
 
 void TcpSocket::shutdown_send() {

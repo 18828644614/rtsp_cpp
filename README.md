@@ -2,9 +2,11 @@
 
 这是一个面向新手的协议学习项目：自己实现 RTSP 会话控制、RTP 收发，以及 H.264 / AAC 的封包和解包。
 
-当前已完成实施路线的 **第 1～6 步**，并完成演进路线的 **阶段 1～3**。服务器只加载一次 H.264 文件，由共享 `MediaSession` 按每 40 ms 一个访问单元统一读取、封装负载和分发。每个客户端仍有独立的 RTSP 会话、RTP 状态、有界出站队列和发送线程；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。允许包含 B 帧，当前时间戳仍是按解码顺序生成的简化时间，不处理真实 PTS/DTS 和实时显示同步。
+当前已完成实施路线的 **第 1～6 步**，以及演进路线的 **阶段 1～3、阶段 5 TCP 基础版和阶段 6 TCP 事件循环版**。服务器只加载一次媒体文件，由一个 `select` 事件循环统一处理监听、所有客户端收发和媒体定时任务。每个客户端保留独立的 RTSP 会话、RTP 状态和有界出站队列；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。允许包含 B 帧，当前时间戳仍是按解码顺序生成的简化时间，不处理真实 PTS/DTS 和实时显示同步。
 
-**新增：演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，由一个媒体线程统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
+事件循环框架和阅读顺序见 [事件循环与非阻塞网络实现说明](event_loop_implementation.md)。当前最多接受 `FD_SETSIZE - 1` 个客户端，默认 63 个；控制阶段空闲 60 秒或待发送数据连续 2 秒无发送进展时回收连接。正常播放不要求客户端周期发送 RTSP 请求；完整 Session 保活仍属于阶段 7。
+
+**演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
 ```powershell
 # 双轨道，音频参数可省略；省略后仍为原来的单视频模式。
@@ -26,6 +28,7 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `CMakeLists.txt` | 构建共用库、客户端、服务器和测试 |
 | `src/net/socket_utils.h/.cpp` | Winsock 初始化、清理和错误报告 |
 | `src/net/tcp_socket.h/.cpp` | 创建连接、监听、接受客户端、收发和关闭 |
+| `src/net/event_loop.h/.cpp` | 复用 select 等待多个 Socket 的读写就绪，支持等待超时 |
 | `src/net/outbound_queue.h/.cpp` | 每连接有界输出队列和关闭同步 |
 | `src/app/command_line.h` | 检查命令行端口参数 |
 | `src/rtsp/rtsp_message.h/.cpp` | 保存、解析和生成 RTSP 请求/响应 |
@@ -43,23 +46,24 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/media/h264_file_reader.h/.cpp` | 读取 Annex-B 文件，按 AUD 分组，提取 SPS/PPS |
 | `src/media/h264_access_unit.h` | AU 数据、IDR 标记、90 kHz 时基的时间和持续时间 |
 | `src/media/media_source.h/.cpp` | 唯一文件读取器、按播放顺序缓存 SPS/PPS、补齐 IDR 参数集 |
-| `src/media/media_session.h/.cpp` | 共享进度、媒体调度线程、订阅和取消、EOF 清理 |
+| `src/media/media_session.h/.cpp` | 共享进度、tick 定时推进、订阅和取消、EOF 清理 |
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 五种请求、状态切换和错误响应 |
-| `src/rtsp/rtsp_server_connection.h/.cpp` | 一个客户端连接的协议处理、订阅生命周期和队列发送线程 |
+| `src/rtsp/rtsp_server_connection.h/.cpp` | 单连接的协议状态、可读/可写处理、部分发送与排空关闭 |
 | `src/rtsp/media_transport.h/.cpp` | TCP interleaved Transport 封装，预留其他传输模式 |
-| `src/rtsp/rtsp_server.h/.cpp` | 监听、接受连接、回收连接线程和停止服务器 |
+| `src/rtsp/rtsp_server.h/.cpp` | 统一事件循环、监听、媒体期限、连接管理和停止服务器 |
 | `src/rtsp/rtsp_client.h/.cpp` | 客户端顺序请求与响应校验 |
 | `src/app/client_main.cpp` | 建立连接，运行完整控制流程 |
 | `src/app/server_main.cpp` | 解析参数并启动多客户端服务器 |
 | `tests/tcp_tests.cpp` | 顺序验证二进制收发、半关闭、资源释放和参数检查 |
+| `tests/event_loop_tests.cpp` | 非阻塞、部分发送、半关闭排空、慢连接隔离、媒体期限、公平预算、连接上限和停止 |
 | `tests/rtsp_tests.cpp` | 验证文本消息、消息体、任意半包、粘包和交织帧 |
 | `tests/session_tests.cpp` | 验证 SDP、URL、通道协商、会话状态与错误请求 |
 | `tests/rtp_tests.cpp` | 验证 RTP 固定字节、可选头、截断和字段上限 |
 | `tests/h264_tests.cpp` | 验证 H.264 固定负载、重组恢复和完整内存链路 |
 | `tests/media_file_tests.cpp` | 文件读写、AUD 分组、SDP 参数和截断检查 |
 | `tests/outbound_tests.cpp` | 出站队列边界、FIFO 和 RTP Sender 字段验证 |
-| `tests/media_session_tests.cpp` | 共享进度、晚加入、暂停恢复、慢订阅、EOF 和线程停止 |
+| `tests/media_session_tests.cpp` | 共享进度、晚加入、暂停恢复、慢订阅、EOF 和事件连接关闭 |
 | `tests/aac_tests.cpp` | ADTS、CRC 头、ASC、固定 AU Header 和非法输入 |
 | `tests/multitrack_tests.cpp` | TCP 双轨道 SETUP、共享时间线、晚加入、取消与独立 EOF |
 | `tests/media_integration.ps1` | 多客户端共享传输、晚加入、EOF 拒绝重播、TEARDOWN、线上 RTP 字段和客户端异常验证 |
@@ -127,11 +131,11 @@ RTSP session completed.
 
 网络层只保留一个 `TcpSocket` 类，先创建对象，再依次调用普通成员函数。共享媒体层使用少量 `shared_ptr` / `weak_ptr` 表达访问单元、订阅和队列的生命周期。
 
-阶段 3 建议依次阅读 `H264AccessUnit` → `H264MediaSource::read()` → `MediaSession::run()` → `MediaSubscription::deliver()` → `RtpSender::send_payloads()`，最后查看 `RtspServerConnection::run()` 中 PLAY 和 TEARDOWN 如何建立、取消订阅。媒体调度线程只生成数据并入队；Socket 始终由各连接自己的发送线程写入。
+当前建议依次阅读 `RtspServer::run()` → `EventLoop::wait()` → `RtspServerConnection::on_readable()` / `handle_item()` → `MediaSession::tick()` → `MediaSubscription::deliver()` → `RtpSender::send_payloads()` → `RtspServerConnection::on_writable()`。所有服务器端逻辑由同一循环线程推进；自带客户端仍使用阻塞接口。`wait_readable()` 也复用了 `EventLoop` 的单 Socket 等待。
 
 阶段 3 验证记录：Debug 构建和全部 9 组 CTest 通过。另用 100 帧、包含 B 帧的真实 H.264 样例验证：A 从头收到 100 帧，B 中途加入后从下一 IDR 收到 75 帧；两者解码后的逐帧 MD5 分别与原视频、原视频对应后半段一致。样例仅保留开头的 SPS/PPS，后续 IDR 由共享源补齐参数集。
 
-服务器的主流程：
+底层阻塞 Socket 的教学用法（自带客户端仍使用此接口；当前服务器通过非阻塞事件循环运行）：
 
 ```cpp
 rtsp::net::TcpSocket listener;        // 一个空对象
@@ -296,7 +300,7 @@ Socket → RtspStreamParser → RTP/RTCP 分流 → RTP 解析
 
 输入约定：小于等于 64 MiB 的短样例、每条 NALU 不超过 4 MiB、每个访问单元带 AUD、包含 SPS/PPS、建议开头为 IDR。读取器启动时一次读入并检查文件，以简化跨块边界与流式缓存。它不解析 slice header，也不验证真实帧率；每个访问单元的 AUD 必须由输入保证。
 
-发送端保持文件顺序，按绝对计划时刻推进：下一次发送时刻增加 40 ms，而不是每次处理完再睡 40 ms。当前由共享媒体线程调度，各连接接收线程独立处理请求，使用 `wait_readable()` 定期检查订阅结束。一个访问单元可能包含多个 NALU 和多个 RTP 包；同一单元时间戳一致，只有最后一个包置 Marker。
+发送端保持文件顺序，按绝对计划时刻推进：下一次视频发送时刻增加 40 ms，而不是每次处理完再睡 40 ms。当前由事件循环根据 `MediaSession::next_deadline()` 调度，使用 `tick()` 推进媒体，连接的可读和可写处理也在同一个线程中执行。一个访问单元可能包含多个 NALU 和多个 RTP 包；同一单元时间戳一致，只有最后一个包置 Marker。
 
 **B 帧的边界：** 当前 RTP 时间戳按发送序号每幅图像增加 3600，仅作为文件闭环实验的占位时间，不代表含 B 帧视频的真实显示时间。客户端不按时间戳排序，只保存还原的编码数据，由外部解码器恢复显示顺序。真实 PTS/DTS、标准实时播放同步留到后续互通阶段。
 
@@ -310,7 +314,7 @@ EOF 可以发现半条交织帧、未完成 FU-A 和缺少末尾 Marker，但无
 - `send_all()` 循环发送，直到全部字节已交给系统，错误通过异常报告。发送完成不等于对端业务已经处理完成。
 - `receive()` 返回实际收到的字节数，返回 `0` 表示对端正常关闭发送方向；缓冲区不能为空。一次读取可能只有部分数据。
 - `shutdown_send()` 只关闭发送方向，可以继续接收；服务器在文件发送结束时用它通知 EOF，随后关闭连接。客户端主动提前结束时仍使用 TEARDOWN。
-- `wait_readable(timeout_ms)` 通过 `select()` 等待数据或 EOF，超时返回 false；不消费字节。连接的接收线程仍使用阻塞式调用，发送由单独线程从有界出站队列取数据；队列满时断开该连接，避免拖住其他客户端。
+- `wait_readable(timeout_ms)` 通过 `EventLoop` / `select()` 等待数据或 EOF，超时返回 false；不消费字节。服务器使用多 Socket 事件等待和非阻塞收发，当前消息的未发送部分保留到下次可写；队列满时断开该连接，避免拖住其他客户端。
 
 ## 1. 第一版目标
 
@@ -320,7 +324,7 @@ EOF 可以发现半条交织帧、未完成 FU-A 和缺少末尾 Marker，但无
 - 服务器支持多个独立客户端连接，先传 H.264 视频，再加入 AAC 音频。
 - 服务器读取本地媒体文件；客户端解包后保存文件，用 ffplay 验证。
 
-当前采用阻塞式 Socket、一个共享媒体线程，以及每连接一个接收线程和一个队列发送线程。后续再扩展 UDP、认证、完整 RTCP 和音视频播放同步。
+当前服务器采用非阻塞 Socket 和一个统一的 select 事件循环；自带客户端保留阻塞式调用。后续再扩展 UDP、认证、完整 RTCP 和音视频播放同步。
 
 ## 2. 先分清三件事
 

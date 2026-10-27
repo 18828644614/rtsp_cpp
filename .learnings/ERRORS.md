@@ -1,5 +1,30 @@
 # 错误记录（Errors）
 
+## [ERR-20261027-001] event-loop-validation
+
+**Logged**: 2026-10-27
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### 摘要（Summary）
+事件循环迁移时请求日志从 std::endl 改为换行，重定向后未即时刷新，导致集成测试无法观察 PLAY；实际客户端已收到全部 20 帧。恢复即时刷新，继续验证。另一次 rg 使用未展开的 Windows 路径通配符，后续改用目录加 -g 过滤。
+
+### 原始错误（Error）
+```text
+first client did not PLAY
+rg: src/media/media_session.*: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+### 建议修复（Suggested Fix）
+保留测试使用的外部可观察日志及刷新行为；Windows 下将文件过滤模式通过 rg -g 传入。
+
+专项测试补充：首次编译缺少 media/h264_depacketizer.h，补齐后成功。最初仅限制 SO_SNDBUF，2 MiB 回环数据被接收端缓冲全部吸收，导致 `test did not exercise send backpressure`；同时限制 SO_RCVBUF 并发送 8 MiB 后，真实 WouldBlock 和逐字节续传校验通过。测试不再假设出现背压前一定已有发送进展。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: src/rtsp/rtsp_server_connection.cpp, tests/media_integration.ps1
+
 ## [ERR-20261022-002] step6-validation
 
 **Logged**: 2026-10-22

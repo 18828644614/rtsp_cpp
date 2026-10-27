@@ -1,3 +1,4 @@
+#include "event_test_driver.h"
 #include "media/media_session.h"
 #include "rtsp/rtsp_server_connection.h"
 #include "rtsp/rtsp_stream_parser.h"
@@ -23,7 +24,11 @@ void check(bool condition, const char* message) {
 template <typename Predicate>
 void wait_for(Predicate ready) {
     const auto deadline = Clock::now() + std::chrono::seconds(3);
-    while (!ready()) {
+    for (;;) {
+        test::pump();
+        if (ready()) {
+            break;
+        }
         check(Clock::now() < deadline, "timed out waiting for media");
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
@@ -65,7 +70,7 @@ rtsp::net::OutboundMessage pop(Peer& peer) {
     return message;
 }
 
-void play(rtsp::MediaSession& media, Peer& peer) {
+void play(test::DrivenMedia& media, Peer& peer) {
     check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
           "subscription was rejected");
     const auto response = pop(peer);
@@ -110,7 +115,7 @@ Frame read_frame(Peer& peer, std::uint16_t& sequence, int channel, std::uint32_t
 
 void test_shared_progress_and_late_join() {
     save_sample(12, 5);
-    rtsp::MediaSession media(input_path);
+    test::DrivenMedia media(input_path);
     // 后续订阅仍能成功，证明它们没有重新打开文件。
     check(std::remove(input_path.c_str()) == 0, "input remained open after loading");
     Peer a;
@@ -145,7 +150,7 @@ void test_shared_progress_and_late_join() {
 
 void test_pause_cancel_and_stop() {
     save_sample(10, 1);
-    rtsp::MediaSession media(input_path);
+    test::DrivenMedia media(input_path);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     Peer a;
     play(media, a);
@@ -175,7 +180,7 @@ void test_pause_cancel_and_stop() {
 
 void test_slow_peer_and_waiting_at_eof() {
     save_sample(8, 3);
-    rtsp::MediaSession media(input_path);
+    test::DrivenMedia media(input_path);
     Peer healthy;
     play(media, healthy);
     std::uint16_t seq = 100;
@@ -190,7 +195,7 @@ void test_slow_peer_and_waiting_at_eof() {
     check(!healthy.subscription->failed(), "slow peer ended shared source");
 
     save_sample(4, 10);  // 只有开头一个 IDR，晚加入者一直等到 EOF。
-    rtsp::MediaSession no_more_idr(input_path);
+    test::DrivenMedia no_more_idr(input_path);
     Peer a;
     play(no_more_idr, a);
     seq = 100;
@@ -204,7 +209,7 @@ void test_slow_peer_and_waiting_at_eof() {
 
 void test_failed_admission_and_idle_stop() {
     save_sample(4, 1);
-    rtsp::MediaSession media(input_path);
+    test::DrivenMedia media(input_path);
     Peer closed;
     closed.queue->close();
     check(media.subscribe(closed.subscription, "PLAY 200") == rtsp::SubscribeResult::QueueClosed,
@@ -215,22 +220,22 @@ void test_failed_admission_and_idle_stop() {
     media.stop();
     check(valid.queue->closed(), "stopping immediately after PLAY leaked subscription");
 
-    rtsp::MediaSession idle(input_path);
+    test::DrivenMedia idle(input_path);
     idle.stop();
     check(idle.ended(), "idle scheduler did not wake on stop");
 }
 
-// 实际启动连接的接收/发送线程，验证它们在控制阶段和播放阶段都能被安全回收。
+// 同一个测试线程驱动收发，验证控制阶段和播放阶段都能安全关闭。
 void test_connection_stop(bool playing) {
     save_sample(20, 5);
-    auto media = std::make_shared<rtsp::MediaSession>(input_path);
+    auto media = std::make_shared<test::DrivenMedia>(input_path);
     rtsp::net::TcpSocket listener;
     listener.listen("127.0.0.1", 0);
     rtsp::net::TcpSocket client;
     client.connect("127.0.0.1", listener.local_port());
-    rtsp::RtspServerConnection connection(media);
+    test::DrivenConnection connection(media);
     connection.accept_from(listener);
-    connection.start();
+
 
     if (playing) {
         rtsp::RtspStreamParser parser;
@@ -240,7 +245,8 @@ void test_connection_stop(bool playing) {
             const auto deadline = Clock::now() + std::chrono::seconds(3);
             while (!parser.next(item)) {
                 check(Clock::now() < deadline, "connection response timed out");
-                if (client.wait_readable(50)) {
+                test::pump();
+                if (client.wait_readable(5)) {
                     const auto count = client.receive(buffer, sizeof(buffer));
                     check(count != 0, "connection ended before responding");
                     parser.append(buffer, count);
@@ -259,10 +265,10 @@ void test_connection_stop(bool playing) {
         response();
     }
     const auto start = Clock::now();
-    connection.stop();
-    connection.join();
+    connection.close();
+    test::wait_finished(connection);
     check(connection.finished() && Clock::now() - start < std::chrono::seconds(2),
-          "connection stop leaked or blocked a thread");
+          "connection stop did not release the event-driven connection");
     media->stop();
 }
 

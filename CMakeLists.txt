@@ -14,6 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(rtsp_core STATIC
     src/net/socket_utils.cpp
     src/net/tcp_socket.cpp
+    src/net/event_loop.cpp
     src/net/outbound_queue.cpp
     src/rtsp/rtsp_message.cpp
     src/rtsp/rtsp_stream_parser.cpp
@@ -52,6 +53,11 @@ if(BUILD_TESTING)
     target_link_libraries(tcp_tests PRIVATE rtsp_core)
     add_test(NAME tcp_tests COMMAND tcp_tests)
     set_tests_properties(tcp_tests PROPERTIES TIMEOUT 20)
+
+    add_executable(event_loop_tests tests/event_loop_tests.cpp)
+    target_link_libraries(event_loop_tests PRIVATE rtsp_core)
+    add_test(NAME event_loop_tests COMMAND event_loop_tests)
+    set_tests_properties(event_loop_tests PROPERTIES TIMEOUT 25)
 
     add_executable(rtsp_tests tests/rtsp_tests.cpp)
     target_link_libraries(rtsp_tests PRIVATE rtsp_core)

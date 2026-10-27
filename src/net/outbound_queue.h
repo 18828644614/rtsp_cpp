@@ -30,6 +30,11 @@ public:
 
     bool push(OutboundMessage message);
     bool pop(OutboundMessage& message);
+    bool try_pop(OutboundMessage& message);
+    bool empty() const;
+    // 事件循环唯一消费者：取出后保留额度，整条消息发送完才释放。
+    bool take_for_send(OutboundMessage& message);
+    void complete_send();
     void close();
     bool closed() const;
     std::size_t bytes() const;
@@ -41,6 +46,8 @@ private:
     std::condition_variable condition_;
     std::deque<OutboundMessage> messages_;
     std::size_t bytes_ = 0;
+    std::size_t sending_bytes_ = 0;
+    bool sending_ = false;
     bool closed_ = false;
 };
 

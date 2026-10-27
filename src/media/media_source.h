@@ -8,7 +8,7 @@
 
 namespace rtsp {
 
-// 文件只在构造时打开一次；之后由 MediaSession 的唯一调度线程推进游标。
+// 文件只在构造时打开一次；之后由事件循环调用 MediaSession::tick 推进游标。
 class H264MediaSource {
 public:
     explicit H264MediaSource(const std::string& path);

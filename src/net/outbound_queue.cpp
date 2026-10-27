@@ -17,7 +17,7 @@ bool OutboundQueue::push(OutboundMessage message) {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     if (closed_ || bytes_ > max_bytes_ - message.wire.size()
-        || (max_messages_ != 0 && messages_.size() >= max_messages_)) {
+        || (max_messages_ != 0 && messages_.size() + (sending_ ? 1 : 0) >= max_messages_)) {
         return false;
     }
     bytes_ += message.wire.size();
@@ -40,6 +40,47 @@ bool OutboundQueue::pop(OutboundMessage& message) {
     messages_.pop_front();
     bytes_ -= message.wire.size();
     return true;
+}
+
+bool OutboundQueue::try_pop(OutboundMessage& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (messages_.empty()) {
+        return false;
+    }
+    message = std::move(messages_.front());
+    messages_.pop_front();
+    bytes_ -= message.wire.size();
+    return true;
+}
+
+bool OutboundQueue::empty() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return messages_.empty();
+}
+
+bool OutboundQueue::take_for_send(OutboundMessage& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (sending_) {
+        throw std::logic_error("complete current send before taking another message");
+    }
+    if (messages_.empty()) {
+        return false;
+    }
+    message = std::move(messages_.front());
+    messages_.pop_front();
+    sending_bytes_ = message.wire.size();
+    sending_ = true;
+    return true;
+}
+
+void OutboundQueue::complete_send() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!sending_) {
+        throw std::logic_error("no current send");
+    }
+    bytes_ -= sending_bytes_;
+    sending_bytes_ = 0;
+    sending_ = false;
 }
 
 void OutboundQueue::close() {

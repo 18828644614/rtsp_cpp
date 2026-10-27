@@ -25,6 +25,25 @@ void test_queue() {
     queue.close();
     check(!queue.push({rtsp::net::OutboundKind::Rtcp, "x"}), "closed queue accepted data");
     check(!queue.pop(message), "closed empty queue did not finish");
+
+    rtsp::net::OutboundQueue pending(5, 1);
+    check(!pending.try_pop(message) && pending.empty(), "empty try_pop did not return immediately");
+    check(pending.push({rtsp::net::OutboundKind::Rtp, "abc"})
+              && pending.take_for_send(message), "could not acquire pending output");
+    check(pending.empty() && pending.bytes() == 3, "in-flight bytes were released too early");
+    check(!pending.push({rtsp::net::OutboundKind::Rtp, "x"}), "in-flight message escaped message limit");
+    pending.complete_send();
+    check(pending.bytes() == 0 && pending.push({rtsp::net::OutboundKind::Rtp, "xyz"}),
+          "completed output did not release queue budget");
+    pending.close();
+    check(pending.try_pop(message) && message.wire == "xyz" && !pending.try_pop(message),
+          "closed queue did not drain in order");
+
+    rtsp::net::OutboundQueue byte_limit(5);
+    check(byte_limit.push({rtsp::net::OutboundKind::Rtp, "abcd"})
+              && byte_limit.take_for_send(message), "could not acquire byte-limit output");
+    check(!byte_limit.push({rtsp::net::OutboundKind::Rtp, "xy"}), "in-flight bytes escaped byte limit");
+    byte_limit.complete_send();
 }
 
 void test_sender() {

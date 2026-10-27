@@ -1,5 +1,18 @@
 # 实现记录
 
+## 阶段 6：事件循环与非阻塞网络（2026-10-27）
+
+- 当前 wait_readable 仅 select 单个 Socket；连接仍各有接收/发送线程。
+- MediaSession::run 的预读帧、时钟原点需要成为成员，tick 只推进到期数据，空订阅暂停。
+- 旧测试直接启动连接线程/等待媒体线程，需要改为显式驱动，保留原行为断言。
+- 输出必须记住当前消息与偏移；在途消息仍计入有界队列，完整发送后释放计数。
+- select 最大 FD_SETSIZE 个 Socket（包含监听）；只为存在输出的连接关注可写。
+- 所有服务器 Socket 的创建后操作/关闭都由运行循环执行；外部 stop 只设置原子标记。
+- 已实现 EventLoop、非阻塞收发、每连接部分发送状态、媒体 tick/next_deadline，服务器不再创建连接或媒体线程。
+- 在途消息仍占队列额度；Open/Draining/Closed 路径支持正常排空与异常关闭；控制空闲 60 秒、发送无进展 2 秒回收。
+- 原有 11 组行为测试迁移后通过，新增专项测试验证 8 MiB 真实背压续传、约 10 MiB FU-A 慢连接隔离、半关闭响应排空、媒体期限/预算、63 客户端上限及停止。
+- 最终 MSVC Debug 构建成功，12/12 CTest 通过（14.26 秒）；文档链接与代码围栏检查通过。
+
 ## TCP 多轨道与 AAC（2026-10-26）
 
 - 当前 SessionDescription、RtspServerSession、MediaSubscription、RtpSender 均存在单 H.264 假设，需要顺序扩展。
