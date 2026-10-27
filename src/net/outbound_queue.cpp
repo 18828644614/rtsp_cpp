@@ -1,6 +1,7 @@
 #include "net/outbound_queue.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace rtsp::net {
 
@@ -15,35 +16,16 @@ bool OutboundQueue::push(OutboundMessage message) {
     if (message.wire.size() > max_bytes_) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
     if (closed_ || bytes_ > max_bytes_ - message.wire.size()
         || (max_messages_ != 0 && messages_.size() + (sending_ ? 1 : 0) >= max_messages_)) {
         return false;
     }
     bytes_ += message.wire.size();
     messages_.push_back(std::move(message));
-    condition_.notify_one();
-    return true;
-}
-
-// 未关闭	有	取出消息，返回 true
-// 已关闭	有	继续取出剩余消息，返回 true
-// 已关闭	无	没有消息可取，返回 false
-bool OutboundQueue::pop(OutboundMessage& message) {
-    std::unique_lock<std::mutex> lock(mutex_);
-    // 队列被关闭 或者 消息队列有数据，才会继续
-    condition_.wait(lock, [this] { return closed_ || !messages_.empty(); });
-    if (messages_.empty()) {
-        return false;
-    }
-    message = std::move(messages_.front());
-    messages_.pop_front();
-    bytes_ -= message.wire.size();
     return true;
 }
 
 bool OutboundQueue::try_pop(OutboundMessage& message) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (messages_.empty()) {
         return false;
     }
@@ -54,12 +36,10 @@ bool OutboundQueue::try_pop(OutboundMessage& message) {
 }
 
 bool OutboundQueue::empty() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return messages_.empty();
 }
 
 bool OutboundQueue::take_for_send(OutboundMessage& message) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (sending_) {
         throw std::logic_error("complete current send before taking another message");
     }
@@ -74,7 +54,6 @@ bool OutboundQueue::take_for_send(OutboundMessage& message) {
 }
 
 void OutboundQueue::complete_send() {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!sending_) {
         throw std::logic_error("no current send");
     }
@@ -84,20 +63,14 @@ void OutboundQueue::complete_send() {
 }
 
 void OutboundQueue::close() {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        closed_ = true;
-    }
-    condition_.notify_all();
+    closed_ = true;
 }
 
 bool OutboundQueue::closed() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return closed_;
 }
 
 std::size_t OutboundQueue::bytes() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return bytes_;
 }
 

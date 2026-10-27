@@ -17,7 +17,6 @@ MediaSubscription::MediaSubscription(std::shared_ptr<net::OutboundQueue> queue)
 void MediaSubscription::add_track(std::size_t index, const MediaTrack& track,
                                    TcpTransport transport, std::uint16_t sequence,
                                    std::uint32_t ssrc) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (active_ || started_) {
         throw std::logic_error("add tracks before PLAY");
     }
@@ -42,7 +41,6 @@ MediaSubscription::~MediaSubscription() {
 }
 
 bool MediaSubscription::start(const std::string& play_response) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (tracks_.empty() || !queue_->push({net::OutboundKind::RtspResponse, play_response})) {
         return false;
     }
@@ -51,7 +49,6 @@ bool MediaSubscription::start(const std::string& play_response) {
 }
 
 void MediaSubscription::cancel() {
-    std::lock_guard<std::mutex> lock(mutex_);
     active_ = false;
 }
 
@@ -73,7 +70,7 @@ bool MediaSubscription::queue_report(TrackSender& track, bool final) {
     return true;
 }
 
-void MediaSubscription::end_locked() {
+void MediaSubscription::end() {
     active_ = false;
     for (auto& track : tracks_) {
         if (track.queued_rtp && !track.final_queued && !failed_) {
@@ -82,13 +79,7 @@ void MediaSubscription::end_locked() {
     }
 }
 
-void MediaSubscription::end() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    end_locked();
-}
-
 std::string MediaSubscription::rtp_info(const std::string& base_url) const {
-    std::lock_guard<std::mutex> lock(mutex_);
     std::string info;
     for (const auto& track : tracks_) {
         if (!info.empty()) { info += ','; }
@@ -99,7 +90,6 @@ std::string MediaSubscription::rtp_info(const std::string& base_url) const {
 }
 
 void MediaSubscription::on_sent(const net::OutboundMessage& message) {
-    std::lock_guard<std::mutex> lock(mutex_);
     for (auto& track : tracks_) {
         if (track.sender->ssrc() != message.ssrc) { continue; }
         if (message.kind == net::OutboundKind::Rtp) {
@@ -114,7 +104,6 @@ void MediaSubscription::on_sent(const net::OutboundMessage& message) {
 
 void MediaSubscription::tick_rtcp(MediaClock::Clock::time_point now,
                                    std::chrono::milliseconds interval) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!active_ || queue_->closed()) { return; }
     for (auto& track : tracks_) {
         if (track.packets != 0 && !track.report_pending
@@ -126,7 +115,6 @@ void MediaSubscription::tick_rtcp(MediaClock::Clock::time_point now,
 }
 
 std::optional<MediaClock::Clock::time_point> MediaSubscription::next_rtcp_deadline() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     std::optional<MediaClock::Clock::time_point> next;
     if (!active_) { return next; }
     for (const auto& track : tracks_) {
@@ -140,7 +128,6 @@ std::optional<MediaClock::Clock::time_point> MediaSubscription::next_rtcp_deadli
 std::string MediaSubscription::prepare_rtcp(const net::OutboundMessage& message,
                                             const MediaClock& clock,
                                             MediaClock::Clock::time_point now) const {
-    std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& track : tracks_) {
         if (track.sender->ssrc() == message.ssrc) {
             return MediaTransport(track.transport).frame_rtcp(make_rtcp_sender_report(
@@ -154,7 +141,6 @@ std::string MediaSubscription::prepare_rtcp(const net::OutboundMessage& message,
 
 bool MediaSubscription::receive_rtcp(unsigned int channel, const std::string& wire) {
     const auto packets = parse_rtcp_compound(wire);  // 完整校验后再更新反馈和保活。
-    std::lock_guard<std::mutex> lock(mutex_);
     bool matched = false;
     for (auto& track : tracks_) {
         if (channel != static_cast<unsigned int>(track.transport.rtcp_channel)) { continue; }
@@ -172,7 +158,6 @@ bool MediaSubscription::receive_rtcp(unsigned int channel, const std::string& wi
 }
 
 std::optional<RtcpReceptionReport> MediaSubscription::receiver_report(std::uint32_t ssrc) const {
-    std::lock_guard<std::mutex> lock(mutex_);
     for (const auto& track : tracks_) {
         if (track.sender->ssrc() == ssrc) { return track.receiver; }
     }
@@ -180,18 +165,15 @@ std::optional<RtcpReceptionReport> MediaSubscription::receiver_report(std::uint3
 }
 
 bool MediaSubscription::finished() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return !active_;
 }
 
 bool MediaSubscription::failed() const {
-    std::lock_guard<std::mutex> lock(mutex_);
     return failed_;
 }
 
 void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& unit,
                                  MediaClock::Clock::time_point presentation_time) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!active_) {
         return;
     }
@@ -233,7 +215,6 @@ void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& u
 }
 
 void MediaSubscription::finish(bool failed) {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (!active_) {
         return;  // 已取消的订阅由连接自行关闭队列，不能抢在 TEARDOWN 响应前关闭。
     }
@@ -243,7 +224,7 @@ void MediaSubscription::finish(bool failed) {
     }
     active_ = false;
     if (!failed_) {
-        end_locked();
+        end();
     }
     // 正常 EOF 允许事件循环排空队列；异常由连接处理路径中断。
     queue_->close();

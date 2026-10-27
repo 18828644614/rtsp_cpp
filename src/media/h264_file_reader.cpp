@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 
 namespace rtsp {
 namespace {
@@ -69,7 +70,7 @@ void H264FileReader::open(const std::string& path) {
         if (end == begin || end - begin > 4 * 1024 * 1024) {
             throw std::runtime_error("empty H264 NALU or NALU larger than 4 MiB");
         }
-        const std::string nalu = data.substr(begin, end - begin);
+        std::string nalu = data.substr(begin, end - begin);
         const unsigned int header = static_cast<unsigned char>(nalu[0]);
         const unsigned int type = header & 0x1f;
         if ((header & 0x80) != 0 || type == 0 || type > 23) {
@@ -81,7 +82,7 @@ void H264FileReader::open(const std::string& path) {
                 if (!has_picture) {
                     throw std::runtime_error("AUD access unit has no picture");
                 }
-                frames.push_back(frame);
+                frames.push_back(std::move(frame));
                 frame = H264AccessUnit{};
                 has_picture = false;
             }
@@ -102,7 +103,7 @@ void H264FileReader::open(const std::string& path) {
         if (type == 8 && pps_.empty()) {
             pps_ = nalu;
         }
-        frame.nalus.push_back(nalu);
+        frame.nalus.push_back(std::move(nalu));
         position = next;
         //这个有意义，下一个循环，会用 position + prefix_size 判断下一个NALU的头位置
         //处理最后一个 NALU 时，找不到后续起始码，find_start_code() 会返回：next == data.size();,退出while循环
@@ -125,8 +126,8 @@ void H264FileReader::open(const std::string& path) {
     //     加入当前访问单元
     // 文件结束：
     //     保存最后一个访问单元
-    frames.push_back(frame);
-    frames_ = frames;
+    frames.push_back(std::move(frame));
+    frames_ = std::move(frames);
 }
 
 bool H264FileReader::read(H264AccessUnit& frame) {

@@ -1,9 +1,7 @@
 #pragma once
 
-#include <condition_variable>
 #include <cstddef>
 #include <deque>
-#include <mutex>
 #include <string>
 #include <cstdint>
 
@@ -24,7 +22,8 @@ struct OutboundMessage {
     bool final_rtcp = false;
 };
 
-// 每个连接独有的有界输出队列。push 不等待空间，避免慢客户端阻塞媒体生产者。
+// 每个连接独有的有界输出队列；所有访问均由所属事件循环线程串行执行，不提供线程同步。
+// push 不等待空间，避免慢客户端阻塞媒体生产者。
 class OutboundQueue {
 public:
     explicit OutboundQueue(std::size_t max_bytes = 4 * 1024 * 1024,
@@ -34,7 +33,7 @@ public:
     OutboundQueue& operator=(const OutboundQueue&) = delete;
 
     bool push(OutboundMessage message);
-    bool pop(OutboundMessage& message);
+    // 没有待取消息时立即返回 false；关闭后仍可取出已有消息。
     bool try_pop(OutboundMessage& message);
     bool empty() const;
     // 事件循环唯一消费者：取出后保留额度，整条消息发送完才释放。
@@ -47,8 +46,6 @@ public:
 private:
     const std::size_t max_bytes_;
     const std::size_t max_messages_;
-    mutable std::mutex mutex_;
-    std::condition_variable condition_;
     std::deque<OutboundMessage> messages_;
     std::size_t bytes_ = 0;
     std::size_t sending_bytes_ = 0;

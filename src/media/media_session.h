@@ -10,7 +10,6 @@
 
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <optional>
 #include <vector>
@@ -18,10 +17,14 @@
 namespace rtsp {
 
 // 一个客户端的一次订阅：轨道独立维护 RTP 状态，共用客户端队列。
+// 所有访问均由所属事件循环线程串行执行，不提供线程同步。
 class MediaSubscription {
 public:
     explicit MediaSubscription(std::shared_ptr<net::OutboundQueue> queue);
     ~MediaSubscription();
+
+    MediaSubscription(const MediaSubscription&) = delete;
+    MediaSubscription& operator=(const MediaSubscription&) = delete;
 
     // 仅在订阅前调用，为已经 SETUP 的轨道建立 Sender。
     void add_track(std::size_t index, const MediaTrack& track, TcpTransport transport,
@@ -64,9 +67,6 @@ private:
                  MediaClock::Clock::time_point presentation_time);
     void finish(bool failed);
     bool queue_report(TrackSender& track, bool final);
-    void end_locked();
-
-    mutable std::mutex mutex_;
     std::shared_ptr<net::OutboundQueue> queue_;
     std::vector<TrackSender> tracks_;
     bool has_video_ = false;

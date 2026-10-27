@@ -66,7 +66,7 @@ struct Peer {
 rtsp::net::OutboundMessage pop(Peer& peer) {
     wait_for([&] { return peer.queue->bytes() != 0 || peer.queue->closed(); });
     rtsp::net::OutboundMessage message;
-    check(peer.queue->pop(message), "unexpected end of queue");
+    check(peer.queue->try_pop(message), "unexpected end of queue");
     return message;
 }
 

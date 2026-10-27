@@ -86,7 +86,7 @@ bool pop(Peer& peer, rtsp::net::OutboundMessage& message) {
         test::pump();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    return peer.queue->pop(message);
+    return peer.queue->try_pop(message);
 }
 
 void play(test::DrivenMedia& media, Peer& peer) {

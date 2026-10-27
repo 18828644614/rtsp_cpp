@@ -30,6 +30,8 @@ RtspServer::run()                     ← 唯一的服务器运行线程
 | `MediaSession` | `tick(now)`、`next_deadline()` | 推进到期媒体，提供下一次期限 |
 | `OutboundQueue` | `try_pop()`、`take_for_send()`、`complete_send()` | 非阻塞取出，约束队列与在途消息 |
 
+`MediaSubscription` 和 `OutboundQueue` 的所有访问均由所属事件循环线程串行执行，不提供线程同步，也没有阻塞 `pop()` 接口。测试显式推进事件循环后用 `try_pop()` 取出消息。
+
 `wait_readable()` 内部也使用 EventLoop，只关注一个 Socket 的读事件。自带客户端继续使用阻塞的 `connect()`、`receive()` 和 `send_all()`。
 
 ## 2. 每轮如何运行

@@ -21,10 +21,10 @@ void test_queue() {
     check(queue.push({rtsp::net::OutboundKind::RtspResponse, "abc"}), "first queue push failed");
     check(!queue.push({rtsp::net::OutboundKind::Rtp, "xyz"}), "byte limit was ignored");
     rtsp::net::OutboundMessage message;
-    check(queue.pop(message) && message.wire == "abc", "queue order changed");
+    check(queue.try_pop(message) && message.wire == "abc", "queue order changed");
     queue.close();
     check(!queue.push({rtsp::net::OutboundKind::Rtcp, "x"}), "closed queue accepted data");
-    check(!queue.pop(message), "closed empty queue did not finish");
+    check(!queue.try_pop(message), "closed empty queue did not finish");
 
     rtsp::net::OutboundQueue pending(5, 1);
     check(!pending.try_pop(message) && pending.empty(), "empty try_pop did not return immediately");
@@ -60,7 +60,7 @@ void test_sender() {
 
     rtsp::net::OutboundMessage first;
     rtsp::net::OutboundMessage second;
-    check(queue.pop(first) && queue.pop(second), "FU-A packets were not queued");
+    check(queue.try_pop(first) && queue.try_pop(second), "FU-A packets were not queued");
     rtsp::RtspStreamParser parser;
     parser.append(first.wire.data(), first.wire.size());
     rtsp::RtspStreamItem item;

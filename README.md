@@ -29,7 +29,7 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/net/socket_utils.h/.cpp` | Winsock 初始化、清理和错误报告 |
 | `src/net/tcp_socket.h/.cpp` | 创建连接、监听、接受客户端、收发和关闭 |
 | `src/net/event_loop.h/.cpp` | 复用 select 等待多个 Socket 的读写就绪，支持等待超时 |
-| `src/net/outbound_queue.h/.cpp` | 每连接有界输出队列和关闭同步 |
+| `src/net/outbound_queue.h/.cpp` | 事件循环线程内的每连接有界输出队列和关闭状态 |
 | `src/app/command_line.h` | 检查命令行端口参数 |
 | `src/rtsp/rtsp_message.h/.cpp` | 保存、解析和生成 RTSP 请求/响应 |
 | `src/rtsp/rtsp_stream_parser.h/.cpp` | 累积 TCP 字节，拆出文本消息或交织帧 |
