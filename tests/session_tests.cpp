@@ -150,7 +150,7 @@ void test_complete_session() {
     const std::string url = "rtsp://127.0.0.1:8554/live";
     rtsp::RtspMessage response = respond(session, request("OPTIONS", "*"));
     check(response.status_code == 200
-              && response.header("Public") == "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN",
+              && response.header("Public") == "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER",
           "OPTIONS did not advertise the implemented methods");
     response = respond(session, request("DESCRIBE", url));
     check(response.status_code == 200 && response.header("Content-Type") == "application/sdp",
@@ -164,7 +164,7 @@ void test_complete_session() {
     rtsp::RtspMessage setup = request("SETUP", track_url);
     setup.set_header("Transport", "RTP/AVP/TCP;unicast;interleaved=10-11");
     response = respond(session, setup);
-    check(response.status_code == 200 && response.header("Session") == "12345",
+    check(response.status_code == 200 && response.header("Session") == "12345;timeout=60",
           "SETUP did not establish a Session");
     check(response.header("Transport") == "RTP/AVP/TCP;unicast;interleaved=10-11"
               && session.tracks()[0].transport.rtp_channel == 10, "SETUP did not negotiate channels");

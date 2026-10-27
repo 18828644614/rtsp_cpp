@@ -4,11 +4,13 @@
 #include "net/tcp_socket.h"
 #include "rtsp/rtsp_server_session.h"
 #include "rtsp/rtsp_stream_parser.h"
+#include "rtsp/runtime_options.h"
 
 #include <chrono>
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace rtsp {
@@ -20,7 +22,8 @@ class MediaSubscription;
 class RtspServerConnection {
 public:
     using Clock = std::chrono::steady_clock;
-    explicit RtspServerConnection(std::shared_ptr<MediaSession> media_session);
+    explicit RtspServerConnection(std::shared_ptr<MediaSession> media_session,
+                                  RuntimeOptions options = {});
     ~RtspServerConnection();
 
     RtspServerConnection(const RtspServerConnection&) = delete;
@@ -33,6 +36,8 @@ public:
     // 检查这个连接是否还能继续工作、是否该进入收尾，以及是否因为长时间没有进展而需要关闭。
     void check_timeout(Clock::time_point now);
     void close();
+    void start_shutdown();
+    std::optional<Clock::time_point> next_deadline() const;
 
     bool wants_read() const;
     bool wants_write() const;
@@ -43,7 +48,7 @@ public:
 private:
     enum class State { Open, Draining, Closed };
     void handle_item(const RtspStreamItem& item);
-    void begin_drain();
+    void begin_drain(Clock::time_point now = Clock::now());
     void fail(const std::exception& error);
 
     net::TcpSocket socket_;
@@ -53,6 +58,9 @@ private:
     // RTSP 协议状态、轨道 SETUP 信息等
     RtspServerSession session_;
     RtspStreamParser parser_;
+    RuntimeOptions options_;
+    std::optional<Clock::time_point> session_deadline_;
+    std::optional<Clock::time_point> drain_deadline_;
     // 当前连接的媒体订阅
     std::shared_ptr<MediaSubscription> subscription_;
     State state_ = State::Open;

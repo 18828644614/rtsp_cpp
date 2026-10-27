@@ -101,6 +101,7 @@ std::vector<Packet> collect(Peer& peer) {
     std::vector<Packet> packets;
     rtsp::net::OutboundMessage message;
     while (pop(peer, message)) {
+        if (message.kind == rtsp::net::OutboundKind::Rtcp) { continue; }
         packets.push_back(decode(message.wire));
     }
     check(!peer.subscription->failed(), "multitrack subscription failed");
@@ -320,6 +321,10 @@ void test_tcp_two_setup_and_media() {
         rtsp::RtspStreamItem item;
         while (parser.next(item)) {
             check(item.is_interleaved, "unexpected RTSP message during media");
+            if (item.channel == 7 || item.channel == 9) {
+                rtsp::parse_rtcp_compound(item.payload);
+                continue;
+            }
             Packet packet;
             packet.channel = item.channel;
             packet.rtp = rtsp::parse_rtp_packet(item.payload);

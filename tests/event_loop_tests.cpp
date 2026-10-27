@@ -254,6 +254,10 @@ void test_slow_connection_isolation() {
         test::pump();
         rtsp::RtspStreamItem item;
         while (parser.next(item)) {
+            if (item.is_interleaved && item.channel == 1) {
+                rtsp::parse_rtcp_compound(item.payload);
+                continue;
+            }
             check(item.is_interleaved && item.channel == 0, "stream framing changed during partial writes");
             const auto packet = rtsp::parse_rtp_packet(item.payload);
             check(packet.sequence_number == sequence++, "partial writes broke RTP sequence");
@@ -372,6 +376,7 @@ void test_media_deadlines_and_budget() {
     media.tick(delayed);
     int markers = 0;
     while (queue->try_pop(message)) {
+        if (message.kind == rtsp::net::OutboundKind::Rtcp) { continue; }
         rtsp::RtspStreamParser parser;
         parser.append(message.wire.data(), message.wire.size());
         rtsp::RtspStreamItem item;

@@ -129,6 +129,41 @@ std::string session_id_from_header(const std::string& text) {
     return trim(text.substr(0, text.find(';')));
 }
 
+SessionHeader parse_session_header(const std::string& text) {
+    SessionHeader parsed;
+    std::istringstream input(text);
+    std::string part;
+    std::getline(input, part, ';');
+    parsed.id = trim(part);
+    if (parsed.id.empty()) {
+        throw std::runtime_error("empty Session id");
+    }
+    for (unsigned char c : parsed.id) {
+        if (c <= 32 || c >= 127) {
+            throw std::runtime_error("invalid Session id");
+        }
+    }
+    while (std::getline(input, part, ';')) {
+        const auto equal = part.find('=');
+        if (lower(trim(part.substr(0, equal))) != "timeout") { continue; }
+        if (parsed.timeout_seconds || equal == std::string::npos) {
+            throw std::runtime_error("invalid or duplicate Session timeout");
+        }
+        const auto value = trim(part.substr(equal + 1));
+        unsigned int seconds = 0;
+        if (value.empty()) { throw std::runtime_error("empty Session timeout"); }
+        for (char c : value) {
+            if (c < '0' || c > '9' || seconds > (2147483647U - (c - '0')) / 10) {
+                throw std::runtime_error("invalid Session timeout");
+            }
+            seconds = seconds * 10 + (c - '0');
+        }
+        if (seconds == 0) { throw std::runtime_error("Session timeout must be positive"); }
+        parsed.timeout_seconds = seconds;
+    }
+    return parsed;
+}
+
 // rtsp://127.0.0.1:8554/live/trackID=0
 // └────── origin ─────┘└---─ path --─┘
 

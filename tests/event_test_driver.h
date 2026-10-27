@@ -31,8 +31,8 @@ public:
 
 class DrivenConnection : public rtsp::RtspServerConnection {
 public:
-    explicit DrivenConnection(std::shared_ptr<rtsp::MediaSession> media)
-        : rtsp::RtspServerConnection(std::move(media)) {
+    explicit DrivenConnection(std::shared_ptr<rtsp::MediaSession> media, rtsp::RuntimeOptions options = {})
+        : rtsp::RtspServerConnection(std::move(media), options) {
         connections.push_back(this);
     }
     ~DrivenConnection() {

@@ -23,7 +23,8 @@ struct TrackState {
 class RtspServerSession {
 public:
     explicit RtspServerSession(const std::string& session_id,
-                               const SessionDescription& description = SessionDescription());
+                               const SessionDescription& description = SessionDescription(),
+                               unsigned int timeout_seconds = 60);
 
     //根据客户端的请求和当前会话状态，决定是否允许操作，更新会话，并生成对应的 RTSP 响应
     RtspMessage handle(const RtspMessage& request);
@@ -33,6 +34,7 @@ public:
 
 private:
     std::string session_id_;
+    unsigned int timeout_seconds_ = 60;
     RtspSessionState state_ = SessionInit;
     std::vector<TrackState> tracks_;
     SessionDescription description_;

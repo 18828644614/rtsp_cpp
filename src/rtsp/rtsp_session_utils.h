@@ -1,10 +1,11 @@
 #pragma once
 
 #include <string>
+#include <optional>
 
 namespace rtsp {
 
-// 两个交织通道分别承载 RTP 和 RTCP；本步只完成协商。
+// 两个协商的交织通道分别承载 RTP 和 RTCP。
 struct TcpTransport {
     int rtp_channel = 0;
     int rtcp_channel = 1;
@@ -17,6 +18,14 @@ std::string make_tcp_transport(const TcpTransport& transport);
 
 // 去掉 Session 后的可选参数，例如 "12345;timeout=60" -> "12345"。
 std::string session_id_from_header(const std::string& text);
+
+struct SessionHeader {
+    std::string id;
+    std::optional<unsigned int> timeout_seconds;
+};
+
+// timeout 是服务端响应声明的秒数；未知扩展参数跳过，非法/重复 timeout 拒绝。
+SessionHeader parse_session_header(const std::string& text);
 
 // 从绝对 RTSP URL 取出资源路径；URL 不合法时抛出异常。
 std::string rtsp_url_path(const std::string& url);

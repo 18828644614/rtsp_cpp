@@ -2,9 +2,9 @@
 
 这是一个面向新手的协议学习项目：自己实现 RTSP 会话控制、RTP 收发，以及 H.264 / AAC 的封包和解包。
 
-当前已完成实施路线的 **第 1～6 步**，以及演进路线的 **阶段 1～3、阶段 5 TCP 基础版和阶段 6 TCP 事件循环版**。服务器只加载一次媒体文件，由一个 `select` 事件循环统一处理监听、所有客户端收发和媒体定时任务。每个客户端保留独立的 RTSP 会话、RTP 状态和有界出站队列；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。允许包含 B 帧，当前时间戳仍是按解码顺序生成的简化时间，不处理真实 PTS/DTS 和实时显示同步。
+当前已完成实施路线的 **第 1～6 步**，以及演进路线的 **阶段 1～3、阶段 5 TCP 基础版、阶段 6 TCP 事件循环版和阶段 7 TCP 基本 RTCP/保活版**。服务器只加载一次媒体文件，由一个 `select` 事件循环统一处理监听、所有客户端收发和媒体定时任务。每个客户端保留独立的 RTSP 会话、RTP 状态和有界出站队列；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。允许包含 B 帧，当前时间戳仍是按解码顺序生成的简化时间，不处理真实 PTS/DTS 和实时显示同步。
 
-事件循环框架和阅读顺序见 [事件循环与非阻塞网络实现说明](event_loop_implementation.md)。当前最多接受 `FD_SETSIZE - 1` 个客户端，默认 63 个；控制阶段空闲 60 秒或待发送数据连续 2 秒无发送进展时回收连接。正常播放不要求客户端周期发送 RTSP 请求；完整 Session 保活仍属于阶段 7。
+事件循环框架和阅读顺序见 [事件循环与非阻塞网络实现说明](event_loop_implementation.md)。当前最多接受 `FD_SETSIZE - 1` 个客户端，默认 63 个。SETUP 后声明 `Session: id;timeout=60`，客户端通过有效会话请求或匹配的 RTCP RR 续期；自带客户端会定时保活。发送连续 2 秒无进展或收尾超过 2 秒时回收连接。详见 [RTCP、保活与运行时实现说明](rtcp_runtime_implementation.md)。
 
 **演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
@@ -17,7 +17,7 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 .\build\Debug\rtsp_server.exe 8554 127.0.0.1 - samples/sample.aac
 ```
 
-自带客户端继续选择 H.264 轨道保存文件，暂不保存 AAC。音视频时间均假定从零开始，视频固定 25 fps；同步测试请使用无 B 帧视频。完整 RTCP SR 和长期播放器同步仍属于后续工作。
+自带客户端继续选择 H.264 轨道保存文件，暂不保存 AAC。音视频时间均假定从零开始，视频固定 25 fps；同步测试请使用无 B 帧视频。已提供基本 RTCP SR 和共同 NTP 映射，真实 PTS/DTS 与任意时长播放器同步仍需后续工作。
 
 ## 当前实现与运行
 
@@ -41,6 +41,9 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/media/aac_packetizer.h/.cpp` | MPEG4-GENERIC / AAC-hbr AU Header 封装 |
 | `src/rtp/rtp_packet.h/.cpp` | RTP 公共头、CSRC、扩展头、Padding 的解析与生成 |
 | `src/rtp/rtp_sender.h/.cpp` | 为单客户端单轨道维护 RTP 状态并投递 RTP |
+| `src/rtp/rtcp_packet.h/.cpp` | SR/SDES/BYE 编码，RTCP compound 与 RR 基本解析 |
+| `src/media/media_clock.h/.cpp` | 共同 NTP 时间映射、每轨道 RTP 时钟换算 |
+| `src/rtsp/runtime_options.h` | 会话、RTCP、空闲、发送和收尾期限 |
 | `src/media/h264_packetizer.h/.cpp` | 原始 NALU 转换为单 NALU 或 FU-A 负载 |
 | `src/media/h264_depacketizer.h/.cpp` | 单 NALU、FU-A、STAP-A 解包与连续性检查 |
 | `src/media/h264_file_reader.h/.cpp` | 读取 Annex-B 文件，按 AUD 分组，提取 SPS/PPS |
@@ -48,7 +51,7 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/media/media_source.h/.cpp` | 唯一文件读取器、按播放顺序缓存 SPS/PPS、补齐 IDR 参数集 |
 | `src/media/media_session.h/.cpp` | 共享进度、tick 定时推进、订阅和取消、EOF 清理 |
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
-| `src/rtsp/rtsp_server_session.h/.cpp` | 五种请求、状态切换和错误响应 |
+| `src/rtsp/rtsp_server_session.h/.cpp` | 六种请求、Session timeout、状态切换和错误响应 |
 | `src/rtsp/rtsp_server_connection.h/.cpp` | 单连接的协议状态、可读/可写处理、部分发送与排空关闭 |
 | `src/rtsp/media_transport.h/.cpp` | TCP interleaved Transport 封装，预留其他传输模式 |
 | `src/rtsp/rtsp_server.h/.cpp` | 统一事件循环、监听、媒体期限、连接管理和停止服务器 |
@@ -57,6 +60,7 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/app/server_main.cpp` | 解析参数并启动多客户端服务器 |
 | `tests/tcp_tests.cpp` | 顺序验证二进制收发、半关闭、资源释放和参数检查 |
 | `tests/event_loop_tests.cpp` | 非阻塞、部分发送、半关闭排空、慢连接隔离、媒体期限、公平预算、连接上限和停止 |
+| `tests/runtime_tests.cpp` | RTCP 固定字节、时间映射、实际发送统计、RTP-Info、保活、超时与结束清理 |
 | `tests/rtsp_tests.cpp` | 验证文本消息、消息体、任意半包、粘包和交织帧 |
 | `tests/session_tests.cpp` | 验证 SDP、URL、通道协商、会话状态与错误请求 |
 | `tests/rtp_tests.cpp` | 验证 RTP 固定字节、可选头、截断和字段上限 |
@@ -89,7 +93,7 @@ ctest --test-dir build -C Debug --output-on-failure
 ffplay -f h264 -framerate 25 received.h264
 ```
 
-使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`、输入 `samples/sample.h264`、输出 `received.h264`。服务器会持续监听，并为每个客户端分配独立的 Session ID；停止服务器需要结束 `rtsp_server` 进程。客户端第四个参数为接收的访问单元数量上限，默认 `0` 表示接收到 EOF；例如 `rtsp_client.exe 127.0.0.1 8554 partial.h264 25` 在接收约一秒后发送 TEARDOWN。等待 TEARDOWN 响应期间仍处理已经到达的媒体，因此输出可能稍多于上限。
+使用 MinGW 或 Ninja 等单配置生成器时，可执行文件通常位于 `build` 目录，去掉上述路径中的 `Debug\`。两个程序均支持 `--help`；不传参数时使用 `127.0.0.1:8554`、输入 `samples/sample.h264`、输出 `received.h264`。服务器会持续监听，并为每个客户端分配独立的 Session ID；按 Ctrl+C 或 Ctrl+Break 触发有限排空后停止。客户端第四个参数为接收的访问单元数量上限，默认 `0` 表示接收到 EOF；例如 `rtsp_client.exe 127.0.0.1 8554 partial.h264 25` 在接收约一秒后发送 TEARDOWN。等待保活或 TEARDOWN 响应期间仍处理已经到达的媒体，因此输出可能稍多于上限。
 
 共享播放规则：第一个有效 PLAY 启动播放；中途加入的客户端等到下一个 IDR，从 SPS/PPS 和该 IDR 开始接收，不补发之前的视频。最后一个订阅退出后暂停推进，后续 PLAY 从保留位置继续并等待 IDR。文件结束后资源保持结束状态，新的 PLAY 返回 `455 Method Not Valid in This State`；重新从头播放需要重启服务器。`Range: npt=0-` 和 FFmpeg 常发送的 `Range: npt=0.000-` 都表示零起点，晚加入客户端会加入当前共享进度；非零 Range 返回 `457 Invalid Range`。若直到 EOF 都没有新的 IDR，等待中的订阅直接结束，服务器记录原因。
 
@@ -107,7 +111,7 @@ ffplay -f h264 -framerate 25 received.h264
 Connected to 127.0.0.1:8554
 > OPTIONS rtsp://127.0.0.1:8554/live, CSeq=1
 < 200 OK
-Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN
+Public: OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER
 > DESCRIBE rtsp://127.0.0.1:8554/live, CSeq=2
 < 200 OK
 > SETUP rtsp://127.0.0.1:8554/live/trackID=0, CSeq=3
@@ -123,7 +127,7 @@ Saved received.h264, access units=125
 RTSP session completed.
 ```
 
-上例 Session 和访问单元数量仅作示意。服务路径固定为 `/live`，视频轨道为 `/live/trackID=0`。客户端按协商通道分流，RTP 进入 H.264 解包器，RTCP 仍只分流跳过；SETUP 前的交织帧、未知通道、错误 PT、序号不连续或 SSRC 改变都会报错。文件结束由服务器关闭发送方向通知，客户端检查 TCP 解析器、未完成 FU-A 和最后一个 Marker 后关闭输出文件。
+上例 Session 和访问单元数量仅作示意。服务路径固定为 `/live`，视频轨道为 `/live/trackID=0`。客户端按协商通道分流，RTP 进入 H.264 解包器，RTCP 校验包结构与 SR 的 SSRC；SETUP 前的交织帧、未知通道、错误 PT、序号不连续或 SSRC 改变都会报错。正常结束时服务器在已有 RTP 后发送最终 SR/SDES/BYE，再关闭发送方向；客户端检查 TCP 解析器、未完成 FU-A 和最后一个 Marker 后关闭输出文件。
 
 程序构建只需要 C++17 编译器、CMake 和 Windows Socket，不链接 FFmpeg。FFmpeg/ffplay 只用于准备真实视频和外部解码验收；CTest 不依赖它们，有 PowerShell 时会自动注册双进程集成测试。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
 
@@ -226,7 +230,7 @@ while (parser.next(item)) {
 - 客户端保存 SETUP 响应中的通道号和 Session，后续 PLAY、TEARDOWN 携带该 Session；允许剥离 `Session` 后的 `;timeout=...` 参数。
 - URL 采用常用 `rtsp://host[:port]/path` 形式；不支持认证、IPv6 URL、重定向或跨主机建立新连接。control 不支持 `.` / `..` 路径段；示例轨道与会话使用同一服务器。
 - 客户端要求 SDP 响应的 Content-Type 为 `application/sdp`；服务器仅处理简单的 Accept 值，不实现完整媒体类型协商。
-- 暂不实现超时保活、认证、PAUSE、任意位置 seek 及播放同步。服务器不宣称支持 Session timeout；第六步已接入媒体和 SPS/PPS。
+- 本节描述早期控制流程；当前已实现 Session timeout、GET_PARAMETER 保活和基本 RTCP。认证、PAUSE、任意位置 seek 和真实 PTS/DTS 仍未实现。
 
 ### 第五步：内存中的 RTP 与 H.264
 

@@ -28,6 +28,9 @@ void MediaSubscription::add_track(std::size_t index, const MediaTrack& track,
     }
     TrackSender state;
     state.index = index;
+    state.transport = transport;
+    state.control = track.control;
+    state.clock_rate = track.clock_rate;
     state.sender = std::make_unique<RtpSender>(MediaTransport(transport),
                                              track.payload_type, sequence, ssrc);
     tracks_.push_back(std::move(state));
@@ -52,6 +55,130 @@ void MediaSubscription::cancel() {
     active_ = false;
 }
 
+bool MediaSubscription::queue_report(TrackSender& track, bool final) {
+    net::OutboundMessage message;
+    message.kind = net::OutboundKind::Rtcp;
+    message.ssrc = track.sender->ssrc();
+    message.final_rtcp = final;
+    // 先占据准确的队列字节额度；连接真正发送本项时再填写计数与时间快照。
+    message.wire = MediaTransport(track.transport).frame_rtcp(
+        make_rtcp_sender_report(message.ssrc, 0, 0, 0, 0, "rtsp-cpp", final));
+    if (!queue_->push(std::move(message))) {
+        failed_ = true;
+        active_ = false;
+        queue_->close();
+        return false;
+    }
+    track.report_pending = true;
+    return true;
+}
+
+void MediaSubscription::end_locked() {
+    active_ = false;
+    for (auto& track : tracks_) {
+        if (track.queued_rtp && !track.final_queued && !failed_) {
+            track.final_queued = queue_report(track, true);
+        }
+    }
+}
+
+void MediaSubscription::end() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    end_locked();
+}
+
+std::string MediaSubscription::rtp_info(const std::string& base_url) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string info;
+    for (const auto& track : tracks_) {
+        if (!info.empty()) { info += ','; }
+        info += "url=" + resolve_control_url(base_url, track.control)
+                + ";seq=" + std::to_string(track.sender->next_sequence());
+    }
+    return info;
+}
+
+void MediaSubscription::on_sent(const net::OutboundMessage& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (auto& track : tracks_) {
+        if (track.sender->ssrc() != message.ssrc) { continue; }
+        if (message.kind == net::OutboundKind::Rtp) {
+            ++track.packets;
+            track.octets += static_cast<std::uint32_t>(message.rtp_payload_bytes);
+        } else if (message.kind == net::OutboundKind::Rtcp) {
+            track.report_pending = false;
+        }
+        return;
+    }
+}
+
+void MediaSubscription::tick_rtcp(MediaClock::Clock::time_point now,
+                                   std::chrono::milliseconds interval) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!active_ || queue_->closed()) { return; }
+    for (auto& track : tracks_) {
+        if (track.packets != 0 && !track.report_pending
+            && (!track.next_report || now >= *track.next_report)) {
+            if (!queue_report(track, false)) { return; }
+            track.next_report = now + interval;
+        }
+    }
+}
+
+std::optional<MediaClock::Clock::time_point> MediaSubscription::next_rtcp_deadline() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::optional<MediaClock::Clock::time_point> next;
+    if (!active_) { return next; }
+    for (const auto& track : tracks_) {
+        if (track.packets == 0 || track.report_pending) { continue; }
+        const auto deadline = track.next_report.value_or(MediaClock::Clock::now());
+        if (!next || deadline < *next) { next = deadline; }
+    }
+    return next;
+}
+
+std::string MediaSubscription::prepare_rtcp(const net::OutboundMessage& message,
+                                            const MediaClock& clock,
+                                            MediaClock::Clock::time_point now) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& track : tracks_) {
+        if (track.sender->ssrc() == message.ssrc) {
+            return MediaTransport(track.transport).frame_rtcp(make_rtcp_sender_report(
+                message.ssrc, clock.ntp_at(now),
+                MediaClock::rtp_at(track.anchor_timestamp, track.anchor_time, track.clock_rate, now),
+                track.packets, track.octets, "rtsp-cpp", message.final_rtcp));
+        }
+    }
+    throw std::logic_error("RTCP output has no matching track");
+}
+
+bool MediaSubscription::receive_rtcp(unsigned int channel, const std::string& wire) {
+    const auto packets = parse_rtcp_compound(wire);  // 完整校验后再更新反馈和保活。
+    std::lock_guard<std::mutex> lock(mutex_);
+    bool matched = false;
+    for (auto& track : tracks_) {
+        if (channel != static_cast<unsigned int>(track.transport.rtcp_channel)) { continue; }
+        for (const auto& packet : packets) {
+            if (packet.type != 201 || packet.ssrc == 0) { continue; }
+            for (const auto& report : packet.reports) {
+                if (report.ssrc == track.sender->ssrc() && track.packets != 0) {
+                    track.receiver = report;
+                    matched = true;
+                }
+            }
+        }
+    }
+    return matched;
+}
+
+std::optional<RtcpReceptionReport> MediaSubscription::receiver_report(std::uint32_t ssrc) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& track : tracks_) {
+        if (track.sender->ssrc() == ssrc) { return track.receiver; }
+    }
+    return std::nullopt;
+}
+
 bool MediaSubscription::finished() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return !active_;
@@ -62,7 +189,8 @@ bool MediaSubscription::failed() const {
     return failed_;
 }
 
-void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& unit) {
+void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& unit,
+                                 MediaClock::Clock::time_point presentation_time) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_) {
         return;
@@ -87,6 +215,11 @@ void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& u
         const auto timestamp = static_cast<std::uint32_t>(unit.pts - base);
         try {
             if (track.sender->send_payloads(unit, timestamp, *queue_)) {
+                if (!track.queued_rtp) {
+                    track.anchor_timestamp = timestamp;
+                    track.anchor_time = presentation_time;
+                    track.queued_rtp = true;
+                }
                 return;
             }
         } catch (const std::exception& error) {
@@ -109,6 +242,9 @@ void MediaSubscription::finish(bool failed) {
         std::cout << "Subscription ended before an IDR became available" << std::endl;
     }
     active_ = false;
+    if (!failed_) {
+        end_locked();
+    }
     // 正常 EOF 允许事件循环排空队列；异常由连接处理路径中断。
     queue_->close();
 }
@@ -180,6 +316,10 @@ void MediaSession::stop() {
 
 std::optional<MediaSession::Clock::time_point> MediaSession::next_deadline() const {
     return next_deadline_;
+}
+
+const MediaClock& MediaSession::clock() const {
+    return clock_;
 }
 
 void MediaSession::finish(bool failed) {
@@ -261,7 +401,7 @@ void MediaSession::tick(Clock::time_point now) {
                 return;
             }
             for (const auto& subscriber : subscribers) {
-                subscriber->deliver(track_index, *unit);
+                subscriber->deliver(track_index, *unit, *next_deadline_);
             }
             if (send_video) {
                 video_.reset();

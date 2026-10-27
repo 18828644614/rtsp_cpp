@@ -5,6 +5,7 @@
 #include <deque>
 #include <mutex>
 #include <string>
+#include <cstdint>
 
 namespace rtsp::net {
 
@@ -17,6 +18,10 @@ enum class OutboundKind {
 struct OutboundMessage {
     OutboundKind kind = OutboundKind::RtspResponse;
     std::string wire;
+    // RTP 完整写出后按 SSRC 更新该轨道统计；RTCP 出队时才快照这些统计。
+    std::uint32_t ssrc = 0;
+    std::size_t rtp_payload_bytes = 0;
+    bool final_rtcp = false;
 };
 
 // 每个连接独有的有界输出队列。push 不等待空间，避免慢客户端阻塞媒体生产者。

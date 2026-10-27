@@ -30,6 +30,8 @@ bool RtpSender::send_payloads(const RtpPayloadUnit& unit, std::uint32_t timestam
 
         net::OutboundMessage message;
         message.kind = net::OutboundKind::Rtp;
+        message.ssrc = ssrc_;
+        message.rtp_payload_bytes = packet.payload.size();
         message.wire = transport_.frame_rtp(serialize_rtp_packet(packet));
         if (!queue.push(std::move(message))) {
             return false;

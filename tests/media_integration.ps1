@@ -161,7 +161,7 @@ function Test-ClientReception([string]$Case) {
             if ($cseq -lt 4) { Send-Text $stream $response; continue }
             $media = Make-Rtp 65535 ([byte[]](0x65, 0xaa))
             if ($Case -eq 'mock-valid' -or $Case -eq 'mock-multitrack') {
-                $media = [byte[]](36, 7, 0, 1, 0) + $media + (Make-Rtp 0 ([byte[]](0x41, 0xbb)))
+                $media = [byte[]](36, 7, 0, 8, 0x80, 201, 0, 1, 0, 0, 0, 2) + $media + (Make-Rtp 0 ([byte[]](0x41, 0xbb)))
             } elseif ($Case -eq 'mock-truncated') {
                 $media = $media[0..($media.Length - 2)]
             } elseif ($Case -eq 'mock-fu-eof') {
@@ -289,8 +289,12 @@ try {
         if ($first -lt 0) { break }
         Check ($first -eq 36) 'expected an interleaved frame'
         $header = Read-Bytes $stream 3
-        Check ($header[0] -eq 6) 'server ignored negotiated RTP channel'
         $rtp = Read-Bytes $stream ($header[1] * 256 + $header[2])
+        if ($header[0] -eq 7) {
+            Check ($rtp.Length -ge 28 -and $rtp[0] -eq 0x80 -and $rtp[1] -eq 200) 'invalid RTCP Sender Report'
+            continue
+        }
+        Check ($header[0] -eq 6) 'server ignored negotiated RTP channel'
         Check ($rtp[0] -eq 0x80 -and ($rtp[1] -band 127) -eq 96) 'invalid RTP version or PT'
         Check (($rtp[2] * 256 + $rtp[3]) -eq ($sequence -band 65535)) 'RTP sequence gap'
         $timestamp = [uint32]$rtp[4] * 16777216 + [uint32]$rtp[5] * 65536 + $rtp[6] * 256 + $rtp[7]

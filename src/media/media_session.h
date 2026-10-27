@@ -5,6 +5,8 @@
 #include "media/media_source.h"
 #include "media/h264_packetizer.h"
 #include "rtp/rtp_sender.h"
+#include "rtp/rtcp_packet.h"
+#include "media/media_clock.h"
 
 #include <chrono>
 #include <memory>
@@ -25,19 +27,44 @@ public:
     void add_track(std::size_t index, const MediaTrack& track, TcpTransport transport,
                    std::uint16_t sequence, std::uint32_t ssrc);
     void cancel();
+    // 正常结束：停止生产并排入最终 SR/SDES/BYE，队列关闭仍由调用者决定。
+    void end();
     bool finished() const;
     bool failed() const;
+    std::string rtp_info(const std::string& base_url) const;
+    void on_sent(const net::OutboundMessage& message);
+    void tick_rtcp(MediaClock::Clock::time_point now, std::chrono::milliseconds interval);
+    std::optional<MediaClock::Clock::time_point> next_rtcp_deadline() const;
+    std::string prepare_rtcp(const net::OutboundMessage& message, const MediaClock& clock,
+                              MediaClock::Clock::time_point now) const;
+    bool receive_rtcp(unsigned int channel, const std::string& wire);
+    std::optional<RtcpReceptionReport> receiver_report(std::uint32_t ssrc) const;
 
 private:
     friend class MediaSession;
     struct TrackSender {
         std::size_t index = 0;
         std::unique_ptr<RtpSender> sender;
+        TcpTransport transport;
+        std::string control;
+        int clock_rate = 90000;
+        bool queued_rtp = false;
+        bool final_queued = false;
+        bool report_pending = false;
+        std::uint32_t anchor_timestamp = 0;
+        MediaClock::Clock::time_point anchor_time{};
+        std::uint32_t packets = 0;
+        std::uint32_t octets = 0;
+        std::optional<MediaClock::Clock::time_point> next_report;
+        std::optional<RtcpReceptionReport> receiver;
     };
 
     bool start(const std::string& play_response);
-    void deliver(std::size_t track_index, const RtpPayloadUnit& unit);
+    void deliver(std::size_t track_index, const RtpPayloadUnit& unit,
+                 MediaClock::Clock::time_point presentation_time);
     void finish(bool failed);
+    bool queue_report(TrackSender& track, bool final);
+    void end_locked();
 
     mutable std::mutex mutex_;
     std::shared_ptr<net::OutboundQueue> queue_;
@@ -76,11 +103,13 @@ public:
     // 把 RTP 数据放入订阅者的 OutboundQueue。
     void tick(Clock::time_point now);
     std::optional<Clock::time_point> next_deadline() const;
+    const MediaClock& clock() const;
 
 private:
     void finish(bool failed);
 
     SessionDescription description_;
+    MediaClock clock_;
     std::unique_ptr<H264MediaSource> video_source_;
     std::unique_ptr<AacFileReader> audio_source_;
     H264Packetizer video_packetizer_;

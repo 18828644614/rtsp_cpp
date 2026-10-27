@@ -6,6 +6,7 @@
 #include "rtsp/rtsp_session_utils.h"
 #include "rtsp/rtsp_stream_parser.h"
 #include "sdp/session_description.h"
+#include <chrono>
 
 namespace rtsp {
 
@@ -22,7 +23,7 @@ public:
 
 private:
     RtspMessage exchange(RtspMessage request);
-    void check_session(const RtspMessage& response) const;
+    void check_session(const RtspMessage& response);
     void handle_interleaved(const RtspStreamItem& item);
     void receive_media(unsigned int frame_limit);
 
@@ -41,6 +42,9 @@ private:
     std::uint16_t next_sequence_ = 0;
     std::uint32_t ssrc_ = 0;
     unsigned int received_frames_ = 0;
+    unsigned int session_timeout_seconds_ = 60;
+    std::string aggregate_url_;
+    std::string keepalive_method_ = "OPTIONS";
 };
 
 }  // namespace rtsp

@@ -2,6 +2,7 @@
 
 #include "net/tcp_socket.h"
 #include "net/event_loop.h"
+#include "rtsp/runtime_options.h"
 
 #include <atomic>
 #include <cstddef>
@@ -18,13 +19,13 @@ class MediaSession;
 class RtspServer {
 public:
     RtspServer(std::string address, std::uint16_t port, std::string video_path,
-               std::string audio_path = "");
+               std::string audio_path = "", RuntimeOptions options = {});
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;
     RtspServer& operator=(const RtspServer&) = delete;
 
-    void run();
+    void run(const std::atomic<bool>* stop_requested = nullptr);
     void stop();
 
     std::uint16_t local_port() const;
@@ -36,6 +37,7 @@ private:
 
     std::string address_;
     std::uint16_t port_;
+    RuntimeOptions options_;
     std::shared_ptr<MediaSession> media_session_;
     net::TcpSocket listener_;
     net::EventLoop event_loop_;

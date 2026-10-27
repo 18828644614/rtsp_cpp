@@ -1,7 +1,9 @@
 #include "rtsp/rtsp_client.h"
+#include "rtp/rtcp_packet.h"
 
 #include <iostream>
 #include <stdexcept>
+#include <algorithm>
 
 namespace rtsp {
 
@@ -17,6 +19,7 @@ RtspMessage RtspClient::exchange(RtspMessage request) {
 
     char buffer[4096];
     RtspStreamItem item;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     for (;;) {
         // 先消费缓冲里的项，不能假定一次 receive 就是一条完整响应。
         while (parser_.next(item)) {
@@ -39,6 +42,11 @@ RtspMessage RtspClient::exchange(RtspMessage request) {
             return response;
         }
 
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0 || !connection_.wait_readable(static_cast<int>(remaining))) {
+            throw std::runtime_error("timed out waiting for RTSP response");
+        }
         const std::size_t count = connection_.receive(buffer, sizeof(buffer));
         if (count == 0) {
             parser_.finish();
@@ -48,10 +56,12 @@ RtspMessage RtspClient::exchange(RtspMessage request) {
     }
 }
 
-void RtspClient::check_session(const RtspMessage& response) const {
-    if (session_id_from_header(response.header("Session")) != session_id_) {
+void RtspClient::check_session(const RtspMessage& response) {
+    const auto header = parse_session_header(response.header("Session"));
+    if (header.id != session_id_) {
         throw std::runtime_error("server changed or omitted the Session id");
     }
+    if (header.timeout_seconds) { session_timeout_seconds_ = *header.timeout_seconds; }
 }
 
 void RtspClient::handle_interleaved(const RtspStreamItem& item) {
@@ -59,6 +69,11 @@ void RtspClient::handle_interleaved(const RtspStreamItem& item) {
         throw std::runtime_error("unexpected interleaved frame before SETUP");
     }
     if (item.channel == static_cast<unsigned int>(transport_.rtcp_channel)) {
+        for (const auto& packet : parse_rtcp_compound(item.payload)) {
+            if (packet.type == 200 && received_packet_ && packet.ssrc != ssrc_) {
+                throw std::runtime_error("RTCP SR SSRC does not match RTP");
+            }
+        }
         return;
     }
     if (item.channel != static_cast<unsigned int>(transport_.rtp_channel)) {
@@ -90,17 +105,54 @@ void RtspClient::handle_interleaved(const RtspStreamItem& item) {
 }
 
 void RtspClient::receive_media(unsigned int frame_limit) {
+    using Clock = std::chrono::steady_clock;
     char buffer[4096];
     RtspStreamItem item;
+    auto interval = std::chrono::milliseconds(static_cast<long long>(session_timeout_seconds_) * 500);
+    auto next_keepalive = Clock::now() + interval;
+    std::string pending_cseq;
+    Clock::time_point response_deadline{};
     for (;;) {
         while (parser_.next(item)) {
             if (!item.is_interleaved) {
-                throw std::runtime_error("unexpected RTSP message during media reception");
+                const auto& response = item.message;
+                if (pending_cseq.empty() || response.is_request
+                    || response.header("CSeq") != pending_cseq) {
+                    throw std::runtime_error("unexpected RTSP message during media reception");
+                }
+                if (response.status_code < 200) { continue; }
+                if (response.status_code != 200) { throw std::runtime_error("Session keepalive failed"); }
+                check_session(response);
+                interval = std::chrono::milliseconds(static_cast<long long>(session_timeout_seconds_) * 500);
+                pending_cseq.clear();
+                next_keepalive = Clock::now() + interval;
+            } else {
+                handle_interleaved(item);
             }
-            handle_interleaved(item);
-            if (frame_limit != 0 && received_frames_ >= frame_limit && frame_complete_) {
+            if (frame_limit != 0 && received_frames_ >= frame_limit && frame_complete_
+                && pending_cseq.empty()) {
                 return;
             }
+        }
+        const auto now = Clock::now();
+        if (!pending_cseq.empty() && now >= response_deadline) {
+            throw std::runtime_error("Session keepalive response timed out");
+        }
+        if (pending_cseq.empty() && now >= next_keepalive) {
+            RtspMessage keepalive;
+            keepalive.method = keepalive_method_;
+            keepalive.uri = aggregate_url_;
+            keepalive.set_header("Session", session_id_);
+            pending_cseq = std::to_string(next_cseq_++);
+            keepalive.set_header("CSeq", pending_cseq);
+            const auto wire = serialize_rtsp_message(keepalive);
+            connection_.send_all(wire.data(), wire.size());
+            response_deadline = now + std::min(interval, std::chrono::milliseconds(5000));
+        }
+        const auto wakeup = pending_cseq.empty() ? next_keepalive : response_deadline;
+        const auto wait_ms = std::chrono::ceil<std::chrono::milliseconds>(wakeup - Clock::now()).count();
+        if (!connection_.wait_readable(static_cast<int>(std::clamp<long long>(wait_ms, 0, 1000)))) {
+            continue;
         }
         const std::size_t count = connection_.receive(buffer, sizeof(buffer));
         if (count == 0) {
@@ -127,6 +179,9 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
     options.method = "OPTIONS";
     options.uri = url;
     const RtspMessage options_response = exchange(options);
+    if (options_response.header("Public").find("GET_PARAMETER") != std::string::npos) {
+        keepalive_method_ = "GET_PARAMETER";
+    }
     std::cout << "Public: " << options_response.header("Public") << '\n';
 
     // 2. 读取 SDP；基地址优先采用 Content-Base，其次 Content-Location，最后请求 URL。
@@ -163,6 +218,7 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
     // 没有聚合 control 属性时，第一版退回 DESCRIBE 请求 URL。
     const std::string aggregate_url = description_.control.empty()
                                           ? url : resolve_control_url(base, description_.control);
+    aggregate_url_ = aggregate_url;
 
     // 3. 为具体轨道申请通道。必须保存服务器响应中的值，不能写死为 0/1。
     RtspMessage setup;
@@ -174,11 +230,13 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
     if (!parse_tcp_transport(setup_response.header("Transport"), negotiated)) {
         throw std::runtime_error("SETUP returned an unsupported Transport");
     }
-    const std::string session_id = session_id_from_header(setup_response.header("Session"));
+    const auto session_header = parse_session_header(setup_response.header("Session"));
+    const std::string session_id = session_header.id;
     if (session_id.empty() || session_id.find_first_of(" \t\r\n") != std::string::npos) {
         throw std::runtime_error("SETUP did not return a valid Session id");
     }
     session_id_ = session_id;
+    if (session_header.timeout_seconds) { session_timeout_seconds_ = *session_header.timeout_seconds; }
     transport_ = negotiated;
     std::cout << "Video: " << video_.encoding << '/' << video_.clock_rate
               << ", payload=" << video_.payload_type << "\nTrack: " << track_url

@@ -47,11 +47,15 @@ bool is_zero_start_range(const std::string& range) {
 }  // namespace
 
 RtspServerSession::RtspServerSession(const std::string& session_id,
-                                   const SessionDescription& description) {
+                                   const SessionDescription& description, unsigned int timeout_seconds) {
     if (session_id.empty() || session_id.find_first_not_of("0123456789") != std::string::npos) {
         throw std::invalid_argument("this demo uses a nonempty numeric session id");
     }
     session_id_ = session_id;
+    if (timeout_seconds == 0 || timeout_seconds > 2147483647U) {
+        throw std::invalid_argument("invalid Session timeout");
+    }
+    timeout_seconds_ = timeout_seconds;
     description_ = description;
     tracks_.resize(description_.tracks.size());
 }
@@ -68,7 +72,7 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
 
     const std::string method = request.method;
     if (method != "OPTIONS" && method != "DESCRIBE" && method != "SETUP"
-        && method != "PLAY" && method != "TEARDOWN") {
+        && method != "PLAY" && method != "TEARDOWN" && method != "GET_PARAMETER") {
         return response_for(request, 501, "Not Implemented");
     }
 
@@ -110,18 +114,26 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
 
     // 已携带 Session 时必须匹配；PLAY 和 TEARDOWN 还要求不能缺失。
     const std::string requested_session = request.header("Session");
+    if (!requested_session.empty()) {
+        try {
+            parse_session_header(requested_session);
+        } catch (const std::runtime_error&) {
+            return response_for(request, 400, "Bad Request");
+        }
+    }
     if (!requested_session.empty()
         && (state_ == SessionInit || session_id_from_header(requested_session) != session_id_)) {
         return response_for(request, 454, "Session Not Found");
     }
-    if ((method == "PLAY" || method == "TEARDOWN") && requested_session.empty()) {
+    if ((method == "PLAY" || method == "TEARDOWN" || method == "GET_PARAMETER")
+        && requested_session.empty()) {
         return response_for(request, 454, "Session Not Found");
     }
     
     //默认创建成功响应
     RtspMessage response = response_for(request, 200, "OK");
     if (method == "OPTIONS") {
-        response.set_header("Public", "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN");
+        response.set_header("Public", "OPTIONS, DESCRIBE, SETUP, PLAY, TEARDOWN, GET_PARAMETER");
     } else if (method == "DESCRIBE") {
         if (!is_aggregate) {
             return response_for(request, 460, "Only Aggregate Operation Allowed");
@@ -161,7 +173,7 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
         tracks_[track_index].transport = requested_transport;
         state_ = SessionReady;
         response.set_header("Transport", make_tcp_transport(requested_transport));
-        response.set_header("Session", session_id_);
+        response.set_header("Session", session_id_ + ";timeout=" + std::to_string(timeout_seconds_));
     } else if (method == "PLAY") {
         if (!is_aggregate) {
             return response_for(request, 460, "Only Aggregate Operation Allowed");
@@ -183,6 +195,18 @@ RtspMessage RtspServerSession::handle(const RtspMessage& request) {
             return response_for(request, 455, "Method Not Valid in This State");
         }
         state_ = SessionClosed;
+        response.set_header("Session", session_id_);
+    } else if (method == "GET_PARAMETER") {
+        if (!is_aggregate) {
+            return response_for(request, 460, "Only Aggregate Operation Allowed");
+        }
+        if (!request.body.empty()) {
+            return response_for(request, 451, "Parameter Not Understood");
+        }
+        response.set_header("Session", session_id_);
+    }
+    if (!requested_session.empty() && response.status_code == 200
+        && response.header("Session").empty()) {
         response.set_header("Session", session_id_);
     }
     return response;

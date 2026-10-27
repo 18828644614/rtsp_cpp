@@ -27,6 +27,8 @@ add_library(rtsp_core STATIC
     src/sdp/session_description.cpp
     src/rtp/rtp_packet.cpp
     src/rtp/rtp_sender.cpp
+    src/rtp/rtcp_packet.cpp
+    src/media/media_clock.cpp
     src/media/h264_packetizer.cpp
     src/media/h264_depacketizer.cpp
     src/media/h264_file_reader.cpp
@@ -49,6 +51,11 @@ target_link_libraries(rtsp_server PRIVATE rtsp_core)
 # 使用 CTest 注册测试，无需安装第三方测试框架。
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(runtime_tests tests/runtime_tests.cpp)
+    target_link_libraries(runtime_tests PRIVATE rtsp_core)
+    add_test(NAME runtime_tests COMMAND runtime_tests)
+    set_tests_properties(runtime_tests PROPERTIES TIMEOUT 25)
+
     add_executable(tcp_tests tests/tcp_tests.cpp)
     target_link_libraries(tcp_tests PRIVATE rtsp_core)
     add_test(NAME tcp_tests COMMAND tcp_tests)

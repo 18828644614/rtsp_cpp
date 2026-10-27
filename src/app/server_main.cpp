@@ -4,8 +4,21 @@
 #include <exception>
 #include <iostream>
 #include <string>
+#include <atomic>
+#include <stdexcept>
+#include <windows.h>
 
 namespace {
+
+std::atomic<bool> console_stop{false};
+
+BOOL WINAPI on_console_control(DWORD event) {
+    if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT) {
+        console_stop.store(true);  // 控制处理线程只置标记，不接触 Socket 和对象生命周期。
+        return TRUE;
+    }
+    return FALSE;
+}
 
 void print_usage() {
     std::cout << "Usage: rtsp_server [port] [bind_address] [input.h264|-] [input.aac]\n"
@@ -34,7 +47,16 @@ int main(int argc, char* argv[]) {
         }
         const std::string audio_path = argc >= 5 ? argv[4] : "";
         rtsp::RtspServer server(address, port, video_path, audio_path);
-        server.run();
+        if (!::SetConsoleCtrlHandler(on_console_control, TRUE)) {
+            throw std::runtime_error("could not register console stop handler");
+        }
+        try {
+            server.run(&console_stop);
+        } catch (...) {
+            ::SetConsoleCtrlHandler(on_console_control, FALSE);
+            throw;
+        }
+        ::SetConsoleCtrlHandler(on_console_control, FALSE);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Server error: " << error.what() << '\n';

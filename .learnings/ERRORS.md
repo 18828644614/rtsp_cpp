@@ -1,5 +1,37 @@
 # 错误记录（Errors）
 
+## [ERR-20261027-001] runtime-test-parameter-set-comparison
+
+**Logged**: 2026-10-27
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### 摘要（Summary）
+新保活集成测试将输入和输出 H.264 原始字节直接比较，错误地把共享源补齐 IDR 参数集判为传输损坏。
+
+### 原始错误（Error）
+```text
+FAIL: client keepalive interrupted or corrupted media
+```
+
+### 上下文（Context）
+样例每帧都是 IDR，但只在文件开头提供 SPS/PPS；共享源按既定策略为后续 IDR 补齐参数集。客户端实际已完整接收 46 帧并完成三次 GET_PARAMETER。
+
+### 建议修复（Suggested Fix）
+验证访问单元数量和图像 NAL 内容；真实媒体验收采用解码结果比较，允许合法重复参数集。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: tests/runtime_tests.cpp, src/media/media_source.cpp
+
+### 解决情况（Resolution）
+- **Resolved**: 2026-10-27
+- **Commit/PR**: working tree
+- **Notes**: 测试已改为验证 46 个访问单元和图像 NAL，无编解码语义变化。
+
+---
+
 ## [ERR-20261027-001] event-loop-validation
 
 **Logged**: 2026-10-27

@@ -12,8 +12,8 @@
 namespace rtsp {
 
 RtspServer::RtspServer(std::string address, std::uint16_t port, std::string video_path,
-                       std::string audio_path)
-    : address_(std::move(address)), port_(port),
+                       std::string audio_path, RuntimeOptions options)
+    : address_(std::move(address)), port_(port), options_(options),
       media_session_(std::make_shared<MediaSession>(video_path, audio_path)) {}
 
 RtspServer::~RtspServer() {
@@ -22,20 +22,23 @@ RtspServer::~RtspServer() {
     close_connections();
 }
 
-void RtspServer::run() {
+void RtspServer::run(const std::atomic<bool>* stop_requested) {
     // 把 running_ 设置为 true
     // 返回设置之前的值
     if (running_.exchange(true)) {
         throw std::logic_error("server is already running");
     }
     stopping_.store(false);
+    const auto should_stop = [&] {
+        return stopping_.load() || (stop_requested && stop_requested->load());
+    };
     try {
         listener_.listen(address_, port_);
         listener_.set_nonblocking();
         bound_port_.store(listener_.local_port());
         std::cout << "RTSP server listening on " << address_ << ':'
                   << bound_port_.load() << std::endl;
-        while (!stopping_.load()) {
+        while (!should_stop()) {
             const auto now = MediaSession::Clock::now();
             media_session_->tick(now);
             for (auto& connection : connections_) {
@@ -58,15 +61,22 @@ void RtspServer::run() {
                     *deadline - MediaSession::Clock::now()).count();
                 timeout_ms = static_cast<int>(std::clamp<long long>(remaining, 0, timeout_ms));
             }
+            for (const auto& connection : connections_) {
+                if (const auto deadline = connection->next_deadline()) {
+                    const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
+                        *deadline - MediaSession::Clock::now()).count();
+                    timeout_ms = static_cast<int>(std::clamp<long long>(remaining, 0, timeout_ms));
+                }
+            }
             const auto events = event_loop_.wait(timeout_ms);
-            if (stopping_.load()) {
+            if (should_stop()) {
                 break;
             }
             for (const auto& event : events) {
                 if (event.socket == listener_.native_handle()) {
                     // 限制每轮 accept 数量，避免连接洪峰挤占已有连接。
                     for (int accepted = 0; accepted < 16; ++accepted) {
-                        auto connection = std::make_unique<RtspServerConnection>(media_session_);
+                        auto connection = std::make_unique<RtspServerConnection>(media_session_, options_);
                         if (!connection->accept_from(listener_)) {
                             break;
                         }
@@ -104,9 +114,33 @@ void RtspServer::run() {
         running_.store(false);
         throw;
     }
-    listener_.close();
-    close_connections();
-    media_session_->stop();
+    try {
+        listener_.close();
+        media_session_->stop();
+        // 停止接受和生产后继续驱动同一事件循环，排空最终 RTCP；每连接有绝对收尾期限。
+        for (auto& connection : connections_) { connection->start_shutdown(); }
+        while (!connections_.empty()) {
+            for (auto& connection : connections_) { connection->check_timeout(MediaSession::Clock::now()); }
+            reap_finished_connections();
+            if (connections_.empty()) { break; }
+            event_loop_.clear();
+            for (const auto& connection : connections_) {
+                event_loop_.watch(connection->native_handle(), false, connection->wants_write());
+            }
+            for (const auto& event : event_loop_.wait(50)) {
+                for (auto& connection : connections_) {
+                    if (connection->native_handle() == event.socket && event.writable) {
+                        connection->on_writable();
+                        break;
+                    }
+                }
+            }
+        }
+    } catch (...) {
+        close_connections();
+        running_.store(false);
+        throw;
+    }
     running_.store(false);
 }
 

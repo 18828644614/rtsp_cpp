@@ -8,6 +8,8 @@
 
 **阶段 6 更新（2026-10-27）：** 已实现 TCP 单线程 select 事件循环，统一驱动监听、多客户端收发和媒体期限；实现部分发送续传、有界在途输出、排空关闭、基本连接超时与连接上限。UDP 仍延后，阶段 6 的 TCP/UDP 混合验收须待阶段 4 完成。框架见 [事件循环与非阻塞网络实现说明](event_loop_implementation.md)。
 
+**阶段 7 更新（2026-10-27）：** 已接入 TCP RTCP SR/SDES/BYE、每轨道实际发送统计和 NTP/RTP 时间映射、RTP-Info 的 url/seq、GET_PARAMETER、自带客户端保活、Session 超时、有限排空与控制台停止。UDP RTCP 跟随阶段 4；固定周期 RTCP 和简化文件时间线的边界见 [RTCP、保活与运行时实现说明](rtcp_runtime_implementation.md)。
+
 ## 一、目标和范围
 
 最终目标包括：
@@ -443,6 +445,10 @@ Windows 第一版可以使用 `select` 或 `WSAPoll`。当前项目以 Windows �
 ### 阶段 7：基本 RTCP、保活和运行时管理
 
 **难度：高。**
+
+**当前状态：TCP 基本版已实现。** 每客户端每轨道独立维护 RTCP 状态，发送 SR + SDES(CNAME)，正常结束追加 BYE；报告按实际完整发送的 RTP 计数，音视频通过共同单调时钟映射到 NTP。PLAY 返回已 SETUP 轨道的 RTP-Info url/seq，等待 IDR 的首包时间尚未确定，因此省略可选 rtptime。SETUP 声明 timeout，支持 GET_PARAMETER 和 Session OPTIONS 保活；自带客户端定时发送保活。匹配轨道 SSRC 的 RR 可续期并保存基本反馈；EOF、TEARDOWN、超时和停止统一有限排空。采用单次共享播放，暂不循环。UDP、真实 PTS/DTS、完整 RTCP 带宽/随机调度仍未实现。
+
+**外部验证：** 66 秒真实双轨道 TCP 传输，FFmpeg 视频 1650 帧逐帧解码哈希与源文件一致，AAC 解码 PCM 一致；晚加入的自带客户端收到正确的 1625 帧后半段。两端共执行 4 次 GET_PARAMETER，无 Session 过期或 FFmpeg 错误。验证跨过默认 60 秒期限；未进行 Wireshark 抓包或任意时长同步验收。
 
 **工作内容：**
 
