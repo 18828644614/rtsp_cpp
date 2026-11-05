@@ -6,6 +6,8 @@
 
 事件循环框架和阅读顺序见 [事件循环与非阻塞网络实现说明](event_loop_implementation.md)。当前最多接受 `FD_SETSIZE - 1` 个客户端，默认 63 个。SETUP 后声明 `Session: id;timeout=60`，客户端通过有效会话请求或匹配的 RTCP RR 续期；自带客户端会定时保活。发送连续 2 秒无进展或收尾超过 2 秒时回收连接。详见 [RTCP、保活与运行时实现说明](rtcp_runtime_implementation.md)。
 
+USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 RTSP 实现框架](USB摄像头RTSP实现框架.md)。该文档说明如何在保留现有协议层的基础上增加摄像头采集、H.264 编码、实时媒体源和线程安全有界队列。
+
 **演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
 ```powershell
