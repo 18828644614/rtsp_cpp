@@ -1,5 +1,16 @@
 # 实现记录
 
+## 阶段 1：抽象媒体源（2026-11-05）
+
+- 目标文档为 `USB摄像头RTSP实现框架.md`，本阶段只改造文件源抽象，不接入摄像头采集/编码。
+- 将 `H264MediaSource` 的实现迁入 `file_video_source.h/.cpp`，只将完整描述改为单条 `MediaTrack`；SPS/PPS 按播放顺序缓存与补齐、PTS/duration、read_count/EOF 逻辑保持原样。
+- `MediaSession` 持有 `unique_ptr<VideoSource>`，路径构造函数委托源注入构造函数创建 `FileVideoSource`，服务端与命令行调用保持兼容。
+- 新增文件源接口契约用例（SDP、缓存参数集更新、EOF 清空输出）、路径/源注入的 SDP、定时、RTSP/RTP/RTCP 逐字节一致性验证。
+- 可复用现有 `.verify/verify_multitrack.py`（FFmpeg/自带客户端双轨道与纯音频）和 `build/verify_shared_media.py`（含 B 帧、晚加入和参数补齐）。FFmpeg 未加入 PATH，但已有两个本地二进制可用。
+- `VideoSource` 为后续实时源预留“false 且非 ended”的状态；`MediaSession` 暂时沿用文件调度，实时等待唤醒按框架阶段 4 接入。
+- 最终验证：MSVC Debug 构建通过；13/13 CTest 通过（21.29 秒）。共享源真实含 B 帧文件：输入/首客户端/晚客户端为 100/100/75 帧，解码逐帧 MD5 匹配。FFmpeg 双轨道视频 75 帧、纯音频和自带客户端均匹配；AAC 解码 PCM 581632 字节，SHA-256 为 `cf98411f665ce05d2ac45210186b9cf3915bbf02c329a0ea217da091a7d4cf53`。
+- 首次构建发现 runtime_tests.cpp 对读取器的间接包含依赖，已补直接头文件并通过回归。工作区已有 `.obsidian/workspace.json` 修改保持不变。
+
 ## 阶段 6：事件循环与非阻塞网络（2026-10-27）
 
 - 当前 wait_readable 仅 select 单个 Socket；连接仍各有接收/发送线程。

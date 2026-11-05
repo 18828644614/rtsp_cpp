@@ -1,4 +1,5 @@
 #include "event_test_driver.h"
+#include "media/h264_file_reader.h"
 #include "media/media_clock.h"
 #include "rtp/rtcp_packet.h"
 #include "rtsp/rtsp_client.h"

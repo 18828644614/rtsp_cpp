@@ -2,7 +2,7 @@
 
 #include "media/aac_file_reader.h"
 #include "media/aac_packetizer.h"
-#include "media/media_source.h"
+#include "media/video_source.h"
 #include "media/h264_packetizer.h"
 #include "rtp/rtp_sender.h"
 #include "rtp/rtcp_packet.h"
@@ -91,6 +91,9 @@ class MediaSession {
 public:
     using Clock = std::chrono::steady_clock;
     explicit MediaSession(const std::string& video_path, const std::string& audio_path = "");
+    // 接管视频源；nullptr 表示关闭视频轨道。源须在构造时准备好轨道配置。
+    explicit MediaSession(std::unique_ptr<VideoSource> video_source,
+                          const std::string& audio_path = "");
     ~MediaSession();
 
     const SessionDescription& description() const;
@@ -111,7 +114,7 @@ private:
 
     SessionDescription description_;
     MediaClock clock_;
-    std::unique_ptr<H264MediaSource> video_source_;
+    std::unique_ptr<VideoSource> video_source_;
     std::unique_ptr<AacFileReader> audio_source_;
     H264Packetizer video_packetizer_;
     AacPacketizer audio_packetizer_;

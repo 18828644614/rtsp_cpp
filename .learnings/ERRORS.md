@@ -313,3 +313,35 @@ error C3861: “resolve_control_url”: 找不到标识符
 - **Notes**: 显式包含 rtsp_session_utils.h，Debug 构建、13 组 CTest 和外部 FFmpeg 解码验证全部通过。
 
 ---
+
+## [ERR-20261105-VS1] video-source-transitive-include
+
+**Logged**: 2026-11-05
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### 摘要（Summary）
+抽取 VideoSource 后，MediaSession 不再间接包含 H264FileReader，暴露 runtime_tests.cpp 的隐式头文件依赖。
+
+### 原始错误（Error）
+```text
+error C2039: "H264FileReader": 不是 "rtsp" 的成员
+```
+
+### 上下文（Context）
+执行 `cmake --build build --config Debug --parallel`；其他目标编译通过，仅 runtime_tests.cpp 中检查输出文件的代码缺少读取器声明。
+
+### 建议修复（Suggested Fix）
+在 runtime_tests.cpp 中直接包含 media/h264_file_reader.h；缩小公共头文件依赖时检查所有类型使用者。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: tests/runtime_tests.cpp, src/media/media_session.h
+- See Also: ERR-20261027-MT1
+
+### 解决情况（Resolution）
+- **Resolved**: 2026-11-05
+- **Notes**: 已直接包含 h264_file_reader.h，Debug 构建成功，13/13 CTest 和现有 FFmpeg 文件传输解码验证全部通过。
+
+---

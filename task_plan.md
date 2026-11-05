@@ -22,16 +22,34 @@
 - [x] 分析当前文件媒体源、MediaSession、RTP 和 RTSP 服务端的可复用边界。
 - [x] 编写 USB 摄像头实时采集与 RTSP 输出实现框架。
 - [x] 在 README 增加框架文档入口。
-- [ ] 抽象 `VideoSource`，保持文件模式回归通过。
+- [x] 抽象 `VideoSource`，保持文件模式回归通过。
 - [ ] 实现摄像头采集、H.264 编码和有界线程安全队列。
 - [ ] 接入实时 `MediaSession`，区分无新帧、结束和失败。
 - [ ] 完成 VLC/ffplay、多客户端、断开和停止流程验收。
 
-当前状态：框架文档已完成，尚未修改生产代码；下一步先验证单帧摄像头采集与 H.264 编码。
+当前状态：框架阶段 1 已完成，文件源与 `MediaSession` 已接入 `VideoSource`；13 组 CTest 与现有 FFmpeg 验证均通过。后续进入摄像头采集最小链路。
 
 错误记录：首次迁移遗漏请求日志的即时刷新，实际传输成功但集成脚本误判未 PLAY；恢复 std::endl 后通过，见 .learnings/ERRORS.md。
 
 专项测试记录：首次编译遗漏 H264Depacketizer 头文件，补齐后成功；只缩发送缓冲不足以在 Windows 回环上形成背压，测试同时限制接收缓冲并使用 8 MiB 数据后，实际 WouldBlock 与续传验证通过。
+
+---
+
+# 阶段 1：抽象媒体源（2026-11-05）
+
+目标：定义 `VideoSource`，将现有文件媒体源命名并封装为 `FileVideoSource`，保持 `MediaSession` 文件播放行为和既有验证结果不变。
+
+- [x] 研究当前媒体源、`MediaSession`、构建配置和测试覆盖。
+- [x] 定义 `VideoSource` 接口并实现 `FileVideoSource`。
+- [x] 迁移 `MediaSession`/服务端调用，保持文件播放协议结果不变。
+- [x] 更新必要文档和回归记录。
+- [x] 构建并运行现有 CTest，执行可用的 FFmpeg 文件传输验证。
+
+决策：沿用文档给出的 `read/ended/track` 语义；文件源将 EOF 映射到 `ended()`，不引入摄像头线程或实时队列；保持已有 H.264 访问单元、SDP 和调度逻辑。
+
+状态：已完成。MSVC Debug 构建成功，13/13 CTest 通过（21.29 秒）；现有 FFmpeg 双轨道/纯音频/自带客户端及含 B 帧共享源验证全部通过。文档、类关系和 README 已同步。
+
+错误记录：首次构建发现 `runtime_tests.cpp` 依赖 `media_session.h` 间接包含 `H264FileReader`；已补齐直接包含，重新构建与完整回归均通过。首次错误记录补丁标题不匹配，写入前被工具拒绝；按实际文件末尾追加后成功。
 
 ---
 

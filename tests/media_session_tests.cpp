@@ -1,4 +1,5 @@
 #include "event_test_driver.h"
+#include "media/file_video_source.h"
 #include "media/media_session.h"
 #include "rtsp/rtsp_server_connection.h"
 #include "rtsp/rtsp_stream_parser.h"
@@ -225,6 +226,44 @@ void test_failed_admission_and_idle_stop() {
     check(idle.ended(), "idle scheduler did not wake on stop");
 }
 
+void test_injected_file_source() {
+    save_sample(3, 2);
+    rtsp::MediaSession by_path(input_path);
+    auto source = std::make_unique<rtsp::FileVideoSource>(input_path);
+    const auto expected_sdp = rtsp::make_sdp({"*", {source->track()}});
+    rtsp::MediaSession injected(std::move(source));
+    check(rtsp::make_sdp(injected.description()) == expected_sdp
+              && rtsp::make_sdp(by_path.description()) == expected_sdp,
+          "injected source changed SDP");
+    check(std::remove(input_path.c_str()) == 0, "session reopened file after construction");
+    Peer a;
+    Peer b;
+    check(by_path.subscribe(a.subscription, "PLAY 200") == rtsp::SubscribeResult::Started
+              && injected.subscribe(b.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "injected file subscription failed");
+    const auto start = Clock::now();
+    std::size_t messages = 0;
+    for (int index = 0; index < 3; ++index) {
+        const auto now = start + std::chrono::milliseconds(index * 40);
+        by_path.tick(now);
+        injected.tick(now);
+        check(by_path.next_deadline() == injected.next_deadline()
+                  && by_path.ended() == injected.ended(), "injected source changed schedule or EOF");
+        rtsp::net::OutboundMessage left;
+        rtsp::net::OutboundMessage right;
+        while (a.queue->try_pop(left)) {
+            check(b.queue->try_pop(right) && left.kind == right.kind && left.wire == right.wire,
+                  "injected source changed RTSP/RTP/RTCP output");
+            ++messages;
+        }
+        check(!b.queue->try_pop(right), "injected source emitted extra output");
+    }
+    check(messages > 3 && by_path.ended() && injected.ended()
+              && a.queue->closed() && b.queue->closed()
+              && !a.subscription->failed() && !b.subscription->failed(),
+          "injected file source did not finish normally");
+}
+
 // 同一个测试线程驱动收发，验证控制阶段和播放阶段都能安全关闭。
 void test_connection_stop(bool playing) {
     save_sample(20, 5);
@@ -280,6 +319,7 @@ int main() {
         test_pause_cancel_and_stop();
         test_slow_peer_and_waiting_at_eof();
         test_failed_admission_and_idle_stop();
+        test_injected_file_source();
         test_connection_stop(false);
         test_connection_stop(true);
         std::remove(input_path.c_str());

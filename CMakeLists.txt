@@ -33,7 +33,7 @@ add_library(rtsp_core STATIC
     src/media/h264_file_reader.cpp
     src/media/aac_file_reader.cpp
     src/media/aac_packetizer.cpp
-    src/media/media_source.cpp
+    src/media/file_video_source.cpp
     src/media/media_session.cpp
     src/media/h264_file_writer.cpp
 )

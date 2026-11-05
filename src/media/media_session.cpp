@@ -1,4 +1,5 @@
 #include "media/media_session.h"
+#include "media/file_video_source.h"
 #include "rtsp/rtsp_stream_parser.h"
 
 #include <chrono>
@@ -233,12 +234,16 @@ void MediaSubscription::finish(bool failed) {
     queue_->close();
 }
 
-MediaSession::MediaSession(const std::string& video_path, const std::string& audio_path) {
+MediaSession::MediaSession(const std::string& video_path, const std::string& audio_path)
+    : MediaSession(video_path.empty() ? nullptr : std::make_unique<FileVideoSource>(video_path),
+                   audio_path) {}
+
+MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source, const std::string& audio_path)
+    : video_source_(std::move(video_source)) {
     description_.tracks.clear();
-    if (!video_path.empty()) {
-        video_source_ = std::make_unique<H264MediaSource>(video_path);
+    if (video_source_) {
         video_track_ = description_.tracks.size();
-        description_.tracks.push_back(video_source_->description().tracks[0]);
+        description_.tracks.push_back(video_source_->track());
     }
     if (!audio_path.empty()) {
         audio_source_ = std::make_unique<AacFileReader>();

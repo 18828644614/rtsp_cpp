@@ -1,4 +1,5 @@
 #include "app/command_line.h"
+#include "media/file_video_source.h"
 #include "media/h264_file_reader.h"
 #include "media/h264_file_writer.h"
 #include "media/h264_depacketizer.h"
@@ -7,6 +8,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 namespace {
@@ -106,6 +108,39 @@ void test_invalid_files() {
     check(rejected, "write before open succeeded");
 }
 
+void test_file_video_source_contract() {
+    const std::string aud("\x09\xf0", 2);
+    const std::string sps("\x67\x64\0\x1f", 4);
+    const std::string pps("\x68\xee", 2);
+    const std::string idr("\x65\xab", 2);
+    const std::string updated_sps("\x67\x64\0\x20", 4);
+    const std::string updated_pps("\x68\xef", 2);
+    save(annex_b(aud) + annex_b(sps) + annex_b(pps) + annex_b(idr)
+         + annex_b(aud) + annex_b(idr)
+         + annex_b(aud) + annex_b(updated_sps) + annex_b(updated_pps) + annex_b(idr)
+         + annex_b(aud) + annex_b(idr));
+    std::unique_ptr<rtsp::VideoSource> source = std::make_unique<rtsp::FileVideoSource>(input_path);
+    check(std::remove(input_path.c_str()) == 0, "file video source kept the input open");
+    const auto& track = source->track();
+    check(track.media_type == "video" && track.encoding == "H264" && track.clock_rate == 90000
+              && track.payload_type == 96 && track.control == "trackID=0"
+              && track.fmtp == rtsp::make_h264_fmtp(sps, pps), "file video track changed");
+    rtsp::H264AccessUnit frame;
+    for (int index = 0; index < 4; ++index) {
+        check(!source->ended() && source->read(frame), "file video source ended early");
+        const auto& expected_sps = index < 2 ? sps : updated_sps;
+        const auto& expected_pps = index < 2 ? pps : updated_pps;
+        check(frame.nalus == std::vector<std::string>({aud, expected_sps, expected_pps, idr}),
+              "IDR parameters did not follow playback order");
+        check(frame.is_keyframe && frame.pts == static_cast<std::uint64_t>(index) * 3600
+                  && frame.duration == 3600, "file video timing changed");
+    }
+    check(source->ended(), "last file AU did not mark source ended");
+    check(!source->read(frame) && frame.nalus.empty() && !frame.is_keyframe
+              && frame.pts == 0 && frame.duration == 0 && source->ended(),
+          "file source EOF did not clear output or remain ended");
+}
+
 void test_parameters_and_finish() {
     const std::string fmtp = rtsp::make_h264_fmtp(
         std::string("\x67\x64\0\x1f", 4), std::string("\x68\xee", 2));
@@ -144,6 +179,7 @@ int main() {
     try {
         test_round_trip();
         test_invalid_files();
+        test_file_video_source_contract();
         test_parameters_and_finish();
         std::remove(input_path.c_str());
         std::remove(output_path.c_str());

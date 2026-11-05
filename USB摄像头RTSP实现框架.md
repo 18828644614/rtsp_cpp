@@ -37,6 +37,8 @@
 
 当前需要替换或扩展的是 `H264MediaSource` 和 `MediaSession` 对文件输入的假设。
 
+2026-11-05 阶段 1 已完成：原 `H264MediaSource` 已迁为 `FileVideoSource` 并实现 `VideoSource`，`MediaSession` 持有接口。摄像头采集、编码、队列和实时等待调度仍按后续阶段实施。
+
 ## 三、目标数据流
 
 ```text
@@ -73,7 +75,7 @@ VLC / ffplay / 其他 RTSP 客户端
 
 ## 四、媒体源抽象
 
-当前 `H264MediaSource` 内部直接持有 `H264FileReader`。建议先提取统一的实时视频源接口，然后保留文件源作为回归实现：
+改造前 `H264MediaSource` 内部直接持有 `H264FileReader`。阶段 1 已提取 `src/media/video_source.h` 中的视频源接口，并保留文件源作为回归实现：
 
 ```cpp
 class VideoSource {
@@ -90,14 +92,14 @@ public:
 };
 ```
 
-建议实现：
+当前文件源实现与后续摄像头源规划：
 
 ```text
 FileVideoSource
-    └─ 复用当前 H264FileReader，保持现有文件模式
+    └─ 已实现，复用 H264FileReader，保持现有文件模式
 
 CameraVideoSource
-    ├─ 打开摄像头设备
+    ├─ 后续阶段：打开摄像头设备
     ├─ 采集原始帧或接收摄像头编码帧
     ├─ 编码为 H.264
     ├─ 提取 SPS/PPS
@@ -106,6 +108,8 @@ CameraVideoSource
 ```
 
 第一版推荐使用 FFmpeg 的设备输入和 H.264 编码，原因是它可以减少 Windows 摄像头格式、像素转换和编码器适配工作。后续如果需要减少外部依赖，再把采集实现替换为 Media Foundation，`CameraVideoSource` 对上层保持不变。
+
+文件源位于 `src/media/file_video_source.h/.cpp`，只暴露一条 `MediaTrack`。`MediaSession` 使用 `unique_ptr<VideoSource>` 接管源，并组装完整 SDP；路径构造函数自动创建 `FileVideoSource`，原服务端入口不需修改。文件读取、SPS/PPS 时序缓存、IDR 参数补齐、固定 3600 tick 的视频时间以及 EOF 后拒绝重播均保留。接口已预留“无帧但未结束”的语义，`MediaSession` 对该状态的短期唤醒处理留在阶段 4。
 
 ## 五、摄像头采集与编码模块
 
@@ -199,10 +203,20 @@ rtsp_server.exe --camera 0 --port 8554 --bind 0.0.0.0 `
 
 ### 阶段 1：抽象媒体源
 
-- [ ] 定义 `VideoSource` 接口；
-- [ ] 将当前文件源改成 `FileVideoSource`；
-- [ ] 保持 `MediaSession` 的文件播放结果不变；
-- [ ] 回归现有 CTest 和 FFmpeg 文件传输验证。
+- [x] 定义 `VideoSource` 接口；
+- [x] 将当前文件源改成 `FileVideoSource`；
+- [x] 保持 `MediaSession` 的文件播放结果不变；
+- [x] 回归现有 CTest 和 FFmpeg 文件传输验证。
+
+阶段 1 验证记录（2026-11-05）：
+
+- MSVC Debug 构建成功；`ctest --test-dir build -C Debug --output-on-failure` 全部 13 组通过，耗时 21.29 秒。
+- `media_file_tests` 增加通过 `VideoSource` 读取文件的接口契约验证，覆盖 SDP、按播放顺序更新 SPS/PPS、IDR 参数补齐、时间信息和 EOF 清空输出。
+- `media_session_tests` 增加文件路径构造与源注入构造的对照，SDP、调度期限、EOF 状态及 RTSP/RTP/RTCP 入队字节一致。
+- 复用本机 `build/verify_shared_media.py`：含 B 帧的 100 帧 H.264 文件，首个客户端收到全部 100 帧，晚加入客户端收到后续 75 帧，FFmpeg 解码逐帧 MD5 分别匹配完整输入和对应后缀。输入只保留开头的 SPS/PPS，后续 IDR 参数由文件源补齐。
+- 复用本机 `.verify/verify_multitrack.py`：FFmpeg TCP 接收 75 帧视频与 AAC，纯音频、自带客户端视频均解码匹配；AAC-LC 为 48 kHz 双声道，解码 PCM 共 581632 字节，SHA-256 为 `cf98411f665ce05d2ac45210186b9cf3915bbf02c329a0ea217da091a7d4cf53`。
+
+上述 FFmpeg 脚本和生成的媒体/日志位于本机忽略目录，FFmpeg 仍只用于验收，不参与 C++ 编译或运行时文件播放。
 
 ### 阶段 2：建立摄像头采集最小链路
 

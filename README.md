@@ -8,6 +8,8 @@
 
 USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 RTSP 实现框架](USB摄像头RTSP实现框架.md)。该文档说明如何在保留现有协议层的基础上增加摄像头采集、H.264 编码、实时媒体源和线程安全有界队列。
 
+摄像头框架的阶段 1 已抽出 `VideoSource` 接口，现有文件源迁为 `FileVideoSource`。`MediaSession` 通过 `read()`、`ended()`、`track()` 使用视频源，也可以接管 `unique_ptr<VideoSource>`；原有文件路径构造方式和命令行保持不变。暂时无帧时的实时等待调度将在摄像头阶段 4 接入。
+
 **演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
 ```powershell
@@ -50,7 +52,8 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/media/h264_depacketizer.h/.cpp` | 单 NALU、FU-A、STAP-A 解包与连续性检查 |
 | `src/media/h264_file_reader.h/.cpp` | 读取 Annex-B 文件，按 AUD 分组，提取 SPS/PPS |
 | `src/media/h264_access_unit.h` | AU 数据、IDR 标记、90 kHz 时基的时间和持续时间 |
-| `src/media/media_source.h/.cpp` | 唯一文件读取器、按播放顺序缓存 SPS/PPS、补齐 IDR 参数集 |
+| `src/media/video_source.h` | 视频源接口：读取 AU、判断结束、提供单条 MediaTrack |
+| `src/media/file_video_source.h/.cpp` | 文件视频源、按播放顺序缓存 SPS/PPS、补齐 IDR 参数集 |
 | `src/media/media_session.h/.cpp` | 共享进度、tick 定时推进、订阅和取消、EOF 清理 |
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 六种请求、Session timeout、状态切换和错误响应 |
@@ -66,9 +69,9 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `tests/session_tests.cpp` | 验证 SDP、URL、通道协商、会话状态与错误请求 |
 | `tests/rtp_tests.cpp` | 验证 RTP 固定字节、可选头、截断和字段上限 |
 | `tests/h264_tests.cpp` | 验证 H.264 固定负载、重组恢复和完整内存链路 |
-| `tests/media_file_tests.cpp` | 文件读写、AUD 分组、SDP 参数和截断检查 |
+| `tests/media_file_tests.cpp` | 文件读写、AUD 分组、视频源接口、参数集更新、SDP 和截断检查 |
 | `tests/outbound_tests.cpp` | 出站队列边界、FIFO 和 RTP Sender 字段验证 |
-| `tests/media_session_tests.cpp` | 共享进度、晚加入、暂停恢复、慢订阅、EOF 和事件连接关闭 |
+| `tests/media_session_tests.cpp` | 共享进度、晚加入、暂停恢复、慢订阅、EOF、源注入一致性和事件连接关闭 |
 | `tests/aac_tests.cpp` | ADTS、CRC 头、ASC、固定 AU Header 和非法输入 |
 | `tests/multitrack_tests.cpp` | TCP 双轨道 SETUP、共享时间线、晚加入、取消与独立 EOF |
 | `tests/media_integration.ps1` | 多客户端共享传输、晚加入、EOF 拒绝重播、TEARDOWN、线上 RTP 字段和客户端异常验证 |
