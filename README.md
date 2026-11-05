@@ -10,6 +10,8 @@ USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 
 
 摄像头框架的阶段 1 已抽出 `VideoSource` 接口，现有文件源迁为 `FileVideoSource`。`MediaSession` 通过 `read()`、`ended()`、`track()` 使用视频源，也可以接管 `unique_ptr<VideoSource>`；原有文件路径构造方式和命令行保持不变。暂时无帧时的实时等待调度将在摄像头阶段 4 接入。
 
+摄像头阶段 2 已增加可选的 `CameraCapture` 和独立 `camera_probe`，支持设备枚举、原始帧采集、时间戳日志、连续采集和停止释放。已验证 `Integrated Camera` 的 1280x720、30 fps、`yuyv422` 模式；物理拔出仍待外接 USB 摄像头验收。构建、运行命令和模块阅读顺序见 [摄像头采集阶段 2 实现说明](camera_capture_implementation.md)。
+
 **演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
 ```powershell
@@ -133,7 +135,7 @@ RTSP session completed.
 
 上例 Session 和访问单元数量仅作示意。服务路径固定为 `/live`，视频轨道为 `/live/trackID=0`。客户端按协商通道分流，RTP 进入 H.264 解包器，RTCP 校验包结构与 SR 的 SSRC；SETUP 前的交织帧、未知通道、错误 PT、序号不连续或 SSRC 改变都会报错。正常结束时服务器在已有 RTP 后发送最终 SR/SDES/BYE，再关闭发送方向；客户端检查 TCP 解析器、未完成 FU-A 和最后一个 Marker 后关闭输出文件。
 
-程序构建只需要 C++17 编译器、CMake 和 Windows Socket，不链接 FFmpeg。FFmpeg/ffplay 只用于准备真实视频和外部解码验收；CTest 不依赖它们，有 PowerShell 时会自动注册双进程集成测试。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
+默认构建只需要 C++17 编译器、CMake 和 Windows Socket，客户端、服务器和原有 CTest 不链接 FFmpeg；FFmpeg/ffplay 仍可用于准备视频和外部解码验收。有 PowerShell 时会自动注册双进程集成测试。显式开启 `ENABLE_CAMERA_CAPTURE` 后，独立摄像头目标才需要 FFmpeg 开发库和 DLL。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
 
 ### 从这里阅读代码
 

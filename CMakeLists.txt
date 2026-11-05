@@ -49,6 +49,11 @@ target_link_libraries(rtsp_server PRIVATE rtsp_core)
 
 # 使用 CTest 注册测试，无需安装第三方测试框架。
 include(CTest)
+option(ENABLE_CAMERA_CAPTURE "Build the standalone FFmpeg/DirectShow camera probe" OFF)
+if(ENABLE_CAMERA_CAPTURE)
+    include(cmake/CameraCapture.cmake)
+endif()
+
 if(BUILD_TESTING)
     add_executable(runtime_tests tests/runtime_tests.cpp)
     target_link_libraries(runtime_tests PRIVATE rtsp_core)
