@@ -53,6 +53,10 @@ option(ENABLE_CAMERA_CAPTURE "Build the standalone FFmpeg/DirectShow camera prob
 if(ENABLE_CAMERA_CAPTURE)
     include(cmake/CameraCapture.cmake)
 endif()
+option(ENABLE_H264_ENCODING "Build the standalone FFmpeg/libx264 encoder and probe" OFF)
+if(ENABLE_H264_ENCODING)
+    include(cmake/H264Encoding.cmake)
+endif()
 
 if(BUILD_TESTING)
     add_executable(runtime_tests tests/runtime_tests.cpp)

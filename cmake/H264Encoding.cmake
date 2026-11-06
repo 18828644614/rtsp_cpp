@@ -1,0 +1,38 @@
+include("${CMAKE_CURRENT_LIST_DIR}/FFmpeg.cmake")
+require_ffmpeg(avcodec avutil swscale)
+
+add_library(h264_encoder STATIC src/media/h264_encoder.cpp)
+target_include_directories(h264_encoder PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(h264_encoder PRIVATE FFmpeg::avcodec FFmpeg::avutil FFmpeg::swscale)
+if(MSVC)
+    target_compile_options(h264_encoder PUBLIC /W4 /utf-8)
+else()
+    target_compile_options(h264_encoder PUBLIC -Wall -Wextra -Wpedantic)
+endif()
+
+add_executable(h264_encode_probe src/app/h264_encode_probe_main.cpp)
+target_link_libraries(h264_encode_probe PRIVATE h264_encoder rtsp_core FFmpeg::avutil)
+if(ENABLE_CAMERA_CAPTURE)
+    target_link_libraries(h264_encode_probe PRIVATE camera_capture)
+    target_compile_definitions(h264_encode_probe PRIVATE RTSP_HAS_CAMERA_CAPTURE)
+endif()
+if(MINGW)
+    target_link_options(h264_encode_probe PRIVATE -municode)
+endif()
+copy_ffmpeg_runtime(h264_encode_probe)
+
+if(BUILD_TESTING)
+    add_executable(h264_encoder_tests tests/h264_encoder_tests.cpp)
+    target_link_libraries(h264_encoder_tests PRIVATE h264_encoder rtsp_core FFmpeg::avcodec FFmpeg::avutil)
+    copy_ffmpeg_runtime(h264_encoder_tests)
+    add_test(NAME h264_encoder_tests COMMAND h264_encoder_tests)
+    set_tests_properties(h264_encoder_tests PROPERTIES TIMEOUT 45)
+    add_test(NAME h264_encode_probe_help COMMAND h264_encode_probe --help)
+    add_test(NAME h264_encode_probe_invalid_option COMMAND h264_encode_probe --not-an-option)
+    set_tests_properties(h264_encode_probe_invalid_option PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME h264_encode_probe_synthetic COMMAND h264_encode_probe
+        --synthetic --width 320 --height 180 --frames 60 --gop 15
+        --output "${CMAKE_CURRENT_BINARY_DIR}/encoder-probe.h264" --quiet)
+    set_tests_properties(h264_encode_probe_help h264_encode_probe_invalid_option
+        h264_encode_probe_synthetic PROPERTIES TIMEOUT 30)
+endif()

@@ -1,5 +1,16 @@
 # 实现记录
 
+## 阶段 3：H.264 编码（2026-11-06）
+
+- CameraFrame 已持有原始 AVFrame 与源时间；编码器采用 Pimpl，消费只读输入并自行持有转换帧。
+- H264AccessUnit 的 NALU 不含起始码，PTS/duration 使用 90 kHz；文件源仍固定 25 fps。生成文件须带 AUD，兼容 H264FileReader。
+- 增加独立编码构建开关，允许没有摄像头/DirectShow 依赖的生成帧编码验证；FFmpeg SDK 需提供 libx264 和 swscale。
+- 保持原 camera_probe 的采集职责；新 h264_encode_probe 串联生成帧或摄像头、编码和文件输出。
+- 首帧有源 PTS 时归零并保留源间隔，个别缺失按帧率延续；首帧缺失则本轮固定为帧率时钟。duration 优先使用有效源时长，否则取相邻绝对帧时间差；输入时间倒退、重复、时间基改变或溢出明确拒绝。
+- 颜色固定为 BT.601（YUYV limited / BGR full → limited YUV420P），SPS/VUI 显式标记；专项测试包含彩色像素和解码后亮度/色度误差、颜色元数据验证。
+- 验证：默认 MinGW Debug 13/13、MSVC 编码 17/17、MSVC 采集加编码 20/20；MinGW Release 编码探测构建及 BGR24 输入通过。720p/30 fps 300 帧输出经独立 FFmpeg 解码与 ffprobe 确认为 h264/yuv420p、BT.601 limited、无 B 帧、300 帧。
+- FFmpeg shared SDK 为 BtbN N-128433-gdb8537d8cc-20261105，位于忽略目录 .verify/stage3-sdk/。两种探测程序通过 DirectShow 枚举均为 0 个设备，实机采集接编码及拔出恢复仍待验证。
+
 ## 阶段 1：抽象媒体源（2026-11-05）
 
 - 目标文档为 `USB摄像头RTSP实现框架.md`，本阶段只改造文件源抽象，不接入摄像头采集/编码。

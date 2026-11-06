@@ -9,7 +9,7 @@
 第一版目标限定为：
 
 - Windows 电脑上的一个 USB 摄像头；
-- 视频分辨率和帧率可配置，默认 1280x720、25 fps；
+- 视频分辨率和帧率可配置，当前采集与编码默认 1280x720、30 fps；
 - 摄像头画面编码为 H.264；
 - 通过现有 RTSP 服务端输出；
 - 使用 RTP over RTSP/TCP，优先保证局域网内稳定播放；
@@ -239,10 +239,20 @@ rtsp_server.exe --camera 0 --port 8554 --bind 0.0.0.0 `
 
 ### 阶段 3：加入 H.264 编码
 
-- [ ] 将摄像头帧编码为 H.264；
-- [ ] 读取 SPS/PPS；
-- [ ] 输出完整访问单元、PTS、duration 和 IDR 标志；
-- [ ] 用独立文件或 FFmpeg 解码器验证编码结果。
+- [x] 将摄像头帧编码为 H.264；
+- [x] 读取 SPS/PPS；
+- [x] 输出完整访问单元、PTS、duration 和 IDR 标志；
+- [x] 用独立文件或 FFmpeg 解码器验证编码结果。
+
+阶段 3 实现与验证记录（2026-11-06）：
+
+- 独立 `H264Encoder` 消费阶段 2 的 `CameraFrame`，内部通过 libswscale 转 YUV420P，再由 libx264 低延迟编码，无 B 帧，输出带 AUD 的完整 AU；NALU 不含起始码，IDR 携带 SPS/PPS。
+- 复用 `H264AccessUnit` 的 90 kHz PTS/duration 与 IDR 标志；保留有效源时间关系，明确区分缺失时间戳时的帧率推算，并检查不递增、时间基改变和溢出。
+- 新增 `ENABLE_H264_ENCODING`，可只开启编码；`h264_encode_probe` 支持生成帧与可选的真实设备输入，输出 Annex-B 文件和逐 AU CSV 时间记录。
+- 无摄像头专项测试用 YUYV422/BGR24、多帧率与多 slice 编码后实际解码，核对彩色图像、时间、参数集、IDR、排空和文件读取兼容性；默认构建 13/13、仅开启编码 17/17、采集加编码 20/20 CTest 通过，MinGW Release 编码探测构建和运行通过。
+- 1280x720、30 fps 生成帧连续编码 300 帧，独立 FFmpeg 解码无错误，ffprobe 确认无 B 帧、YUV420P、300 帧。当前机器无摄像头，真实设备采集接编码的实机验收待补；阶段 4/5 的线程、队列和实时 RTSP 接入尚未实施。
+
+接口、构建、时间规则和完整验证命令见 [H.264 编码阶段 3 实现说明](h264_encoder_implementation.md)。
 
 ### 阶段 4：接入 `CameraVideoSource`
 

@@ -4,7 +4,7 @@
 
 阶段 2 提供独立的 Windows 原始视频采集链路：枚举设备、固定采集模式、取得原始帧、保留时间信息、停止和释放。原有 RTSP 文件播放接口保持原样。
 
-本机已确认 `Integrated Camera` 支持 1280x720、30 fps、`yuyv422`。首版配置默认采用这组参数，也可选择设备支持的其他尺寸以及 `bgr24`。仅支持 rawvideo 输入；MJPEG 解码、像素转换、H.264 编码、实时队列和 RTSP 接入留在后续阶段。
+阶段 2 原验证设备 `Integrated Camera` 支持 1280x720、30 fps、`yuyv422`。首版配置默认采用这组参数，也可选择设备支持的其他尺寸以及 `bgr24`。采集模块仅支持 rawvideo 输入；阶段 3 已由独立 `H264Encoder` 实现像素转换和 H.264 编码，见 [阶段 3 说明](h264_encoder_implementation.md)。MJPEG 解码、实时队列和 RTSP 接入留在后续阶段。
 
 ## 构建
 
