@@ -83,8 +83,11 @@ void validate(const CameraConfig& config) {
 }
 
 struct CameraCapture::Impl {
+    // 已打开的摄像头输入，负责从设备读取数据包
     AVFormatContext* input = nullptr;
+    // 把输入包转换成原始视频帧
     AVCodecContext* decoder = nullptr;
+    // 可重复使用的数据包容器
     AVPacket* packet = nullptr;
     AVFrame* decoded = nullptr;
     int stream_index = -1;
@@ -140,6 +143,7 @@ CameraCapture::~CameraCapture() { close(); }
 
 std::string CameraCapture::ffmpeg_version() { return av_version_info(); }
 
+// 枚举设备：先知道系统里有什么摄像头
 std::vector<CameraDeviceInfo> CameraCapture::enumerate_devices() {
     ComScope scope;
     ComPtr<ICreateDevEnum> device_enum;
