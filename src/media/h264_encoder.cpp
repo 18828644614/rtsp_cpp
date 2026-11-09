@@ -404,6 +404,7 @@ std::vector<H264AccessUnit> H264Encoder::flush() {
     std::vector<H264AccessUnit> output;
     try {
         int sent = avcodec_send_frame(impl_->codec, nullptr);
+        // 现在不能立刻接受这次输入，请先把已有输出取走
         if (sent == AVERROR(EAGAIN)) {
             impl_->receive(output);
             sent = avcodec_send_frame(impl_->codec, nullptr);

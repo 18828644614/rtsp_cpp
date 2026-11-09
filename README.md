@@ -8,11 +8,13 @@
 
 USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 RTSP 实现框架](USB摄像头RTSP实现框架.md)。该文档说明如何在保留现有协议层的基础上增加摄像头采集、H.264 编码、实时媒体源和线程安全有界队列。
 
-摄像头框架的阶段 1 已抽出 `VideoSource` 接口，现有文件源迁为 `FileVideoSource`。`MediaSession` 通过 `read()`、`ended()`、`track()` 使用视频源，也可以接管 `unique_ptr<VideoSource>`；原有文件路径构造方式和命令行保持不变。暂时无帧时的实时等待调度将在摄像头阶段 4 接入。
+摄像头框架的阶段 1 已抽出 `VideoSource` 接口，现有文件源迁为 `FileVideoSource`。`MediaSession` 通过 `read()`、`ended()`、`track()` 使用视频源，也可以接管 `unique_ptr<VideoSource>`；阶段 4 已接入暂时无帧时的短期重试和实时源生命周期。
 
 摄像头阶段 2 已增加可选的 `CameraCapture` 和独立 `camera_probe`，支持设备枚举、原始帧采集、时间戳日志、连续采集和停止释放。已验证 `Integrated Camera` 的 1280x720、30 fps、`yuyv422` 模式；物理拔出仍待外接 USB 摄像头验收。构建、运行命令和模块阅读顺序见 [摄像头采集阶段 2 实现说明](camera_capture_implementation.md)。
 
-摄像头阶段 3 已增加可选 `H264Encoder` 和独立 `h264_encode_probe`：将 YUYV422/BGR24 原始帧转成 YUV420P，再用 libx264 输出带 SPS/PPS、IDR 和 90 kHz 时间的完整 H.264 访问单元。`ENABLE_H264_ENCODING=ON` 可以独立构建，用生成帧完成无摄像头的编码/解码验证；同时开启采集选项可接真实设备。构建、时间规则和验收见 [H.264 编码阶段 3 实现说明](h264_encoder_implementation.md)。实时队列和 RTSP 接入留到后续阶段。
+摄像头阶段 3 已增加可选 `H264Encoder` 和独立 `h264_encode_probe`：将 YUYV422/BGR24 原始帧转成 YUV420P，再用 libx264 输出带 SPS/PPS、IDR 和 90 kHz 时间的完整 H.264 访问单元。`ENABLE_H264_ENCODING=ON` 可以独立构建，用生成帧完成无摄像头的编码/解码验证；同时开启采集选项可接真实设备。构建、时间规则和验收见 [H.264 编码阶段 3 实现说明](h264_encoder_implementation.md)。
+
+摄像头阶段 4 已增加 `CameraVideoSource`、采集/编码工作线程和同时限制帧数/字节数的 `VideoFrameQueue`；队列溢出后等待 IDR，重新有观看者时从最新可用 IDR 恢复。`MediaSession` 暂时无帧时在 5 ms 后重试，正常结束和失败分别收尾，停止时回收生产线程。已提供生成帧输入及 RTP 重组后的真实解码测试；模块接口、构建和验证说明见 [CameraVideoSource 阶段 4 实现说明](camera_video_source_implementation.md)。服务器摄像头入口和实机播放器验收留待阶段 5。
 
 **演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
@@ -58,6 +60,9 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `src/media/h264_access_unit.h` | AU 数据、IDR 标记、90 kHz 时基的时间和持续时间 |
 | `src/media/video_source.h` | 视频源接口：读取 AU、判断结束、提供单条 MediaTrack |
 | `src/media/file_video_source.h/.cpp` | 文件视频源、按播放顺序缓存 SPS/PPS、补齐 IDR 参数集 |
+| `src/media/camera_video_source.h/.cpp` | 可选实时源、采集/编码线程、首帧握手和状态管理 |
+| `src/media/camera_capture_input.h/.cpp` | 可选真实设备输入，工作线程打开、读取和关闭设备 |
+| `src/media/video_frame_queue.h/.cpp` | 线程安全有界 AU 队列、溢出 IDR 恢复和结束/异常传递 |
 | `src/media/media_session.h/.cpp` | 共享进度、tick 定时推进、订阅和取消、EOF 清理 |
 | `src/media/h264_file_writer.h/.cpp` | 补四字节起始码，保存完整 NALU |
 | `src/rtsp/rtsp_server_session.h/.cpp` | 六种请求、Session timeout、状态切换和错误响应 |
@@ -76,6 +81,8 @@ ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
 | `tests/media_file_tests.cpp` | 文件读写、AUD 分组、视频源接口、参数集更新、SDP 和截断检查 |
 | `tests/outbound_tests.cpp` | 出站队列边界、FIFO 和 RTP Sender 字段验证 |
 | `tests/media_session_tests.cpp` | 共享进度、晚加入、暂停恢复、慢订阅、EOF、源注入一致性和事件连接关闭 |
+| `tests/video_frame_queue_tests.cpp` | 双重容量限制、IDR 恢复、结束/异常和生产消费并发 |
+| `tests/camera_video_source_tests.cpp` | 生成帧采集编码、等待/结束/故障、空闲恢复、停止和 RTP 实际解码 |
 | `tests/aac_tests.cpp` | ADTS、CRC 头、ASC、固定 AU Header 和非法输入 |
 | `tests/multitrack_tests.cpp` | TCP 双轨道 SETUP、共享时间线、晚加入、取消与独立 EOF |
 | `tests/media_integration.ps1` | 多客户端共享传输、晚加入、EOF 拒绝重播、TEARDOWN、线上 RTP 字段和客户端异常验证 |

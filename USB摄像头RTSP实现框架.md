@@ -39,6 +39,8 @@
 
 2026-11-05 阶段 1 已完成：原 `H264MediaSource` 已迁为 `FileVideoSource` 并实现 `VideoSource`，`MediaSession` 持有接口。摄像头采集、编码、队列和实时等待调度仍按后续阶段实施。
 
+2026-11-09 进度更新：阶段 1～4 的软件实现已完成，阶段 4 已通过生成帧的无摄像头验证；阶段 5 的服务器摄像头入口和实机网络播放验收待实施。
+
 ## 三、目标数据流
 
 ```text
@@ -99,7 +101,7 @@ FileVideoSource
     └─ 已实现，复用 H264FileReader，保持现有文件模式
 
 CameraVideoSource
-    ├─ 后续阶段：打开摄像头设备
+    ├─ 阶段 4 已实现：由采集/编码工作线程打开摄像头设备
     ├─ 采集原始帧或接收摄像头编码帧
     ├─ 编码为 H.264
     ├─ 提取 SPS/PPS
@@ -109,7 +111,7 @@ CameraVideoSource
 
 第一版推荐使用 FFmpeg 的设备输入和 H.264 编码，原因是它可以减少 Windows 摄像头格式、像素转换和编码器适配工作。后续如果需要减少外部依赖，再把采集实现替换为 Media Foundation，`CameraVideoSource` 对上层保持不变。
 
-文件源位于 `src/media/file_video_source.h/.cpp`，只暴露一条 `MediaTrack`。`MediaSession` 使用 `unique_ptr<VideoSource>` 接管源，并组装完整 SDP；路径构造函数自动创建 `FileVideoSource`，原服务端入口不需修改。文件读取、SPS/PPS 时序缓存、IDR 参数补齐、固定 3600 tick 的视频时间以及 EOF 后拒绝重播均保留。接口已预留“无帧但未结束”的语义，`MediaSession` 对该状态的短期唤醒处理留在阶段 4。
+文件源位于 `src/media/file_video_source.h/.cpp`，只暴露一条 `MediaTrack`。`MediaSession` 使用 `unique_ptr<VideoSource>` 接管源，并组装完整 SDP；路径构造函数自动创建 `FileVideoSource`，原服务端入口不需修改。文件读取、SPS/PPS 时序缓存、IDR 参数补齐、固定 3600 tick 的视频时间以及 EOF 后拒绝重播均保留。阶段 4 已接入“无帧但未结束”时的 5 ms 重试，并增加默认的 `is_live/resume/stop` 生命周期接口。
 
 ## 五、摄像头采集与编码模块
 
@@ -256,10 +258,20 @@ rtsp_server.exe --camera 0 --port 8554 --bind 0.0.0.0 `
 
 ### 阶段 4：接入 `CameraVideoSource`
 
-- [ ] 增加采集/编码线程；
-- [ ] 增加线程安全有界队列；
-- [ ] 实现“无新帧”和“已结束”的区分；
-- [ ] 将实时帧交给 `MediaSession`。
+- [x] 增加采集/编码线程；
+- [x] 增加线程安全有界队列；
+- [x] 实现“无新帧”和“已结束”的区分；
+- [x] 将实时帧交给 `MediaSession`。
+
+阶段 4 实现记录（2026-11-09，无摄像头）：
+
+- 新增 `CameraVideoSource` 与可注入 `CameraFrameInput`，工作线程完成采集/编码；真实设备适配器在同一工作线程打开和关闭设备。启动限时等待首个 IDR/SPS/PPS，构造后轨道描述稳定可用。
+- 新增 `VideoFrameQueue`，默认最多 60 个 AU / 8 MiB NALU 负载，溢出时清除参考依赖并等待 IDR；生产者不等待队列空位。正常结束先排空编码器和缓存，异常跨线程传给消费者。
+- `MediaSession` 无新帧时设置 5 ms 重试，明确结束后才正常 finish；失败执行异常收尾。无人观看时不推进，重新订阅时清除预读旧帧并从最新可用 IDR 恢复，停止时通知并等待工作线程释放资源。
+- 无硬件专项测试使用生成原始帧走真实 libx264 编码、线程队列和 MediaSession；输出 RTP 重组后由 FFmpeg 实际解码，另覆盖启动失败、采集故障、队列溢出、并发、等待、结束和停止。
+- MSVC Debug 三种配置全部通过：默认构建 14/14 CTest（21.24 秒）、仅编码 19/19（22.45 秒）、采集加编码 22/22（22.02 秒）；原有文件传输集成测试均保留并通过。
+
+接口、构建和验证步骤见 [CameraVideoSource 阶段 4 实现说明](camera_video_source_implementation.md)。真实摄像头采集、拔出和播放器验收待具备设备时执行；服务器摄像头命令行与网络播放入口继续留在阶段 5。
 
 ### 阶段 5：接入 RTSP 输出
 

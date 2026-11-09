@@ -3,6 +3,7 @@
 #include "media/camera_frame.h"
 
 #include <chrono>
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,7 +47,8 @@ public:
     static std::string ffmpeg_version();
     static std::vector<CameraDeviceInfo> enumerate_devices();
 
-    void open(const CameraConfig& config);
+    // 可选外部停止标记须存活到 close；用于工作线程打开设备时保留并发停止请求。
+    void open(const CameraConfig& config, const std::atomic<bool>* stop_requested = nullptr);
     CaptureResult read(CameraFrame& frame, std::chrono::milliseconds timeout);
     void request_stop();
     void close();

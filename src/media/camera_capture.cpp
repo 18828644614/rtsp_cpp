@@ -94,6 +94,7 @@ struct CameraCapture::Impl {
     CameraFormat actual;
     std::string error;
     std::atomic<bool> stop{false};
+    const std::atomic<bool>* external_stop = nullptr;
     std::mutex wait_mutex;
     std::condition_variable wake;
     bool failed = false;
@@ -101,7 +102,11 @@ struct CameraCapture::Impl {
     std::optional<std::int64_t> first_pts;
 
     static int interrupted(void* opaque) {
-        return static_cast<Impl*>(opaque)->stop.load() ? 1 : 0;
+        return static_cast<Impl*>(opaque)->stopped() ? 1 : 0;
+    }
+
+    bool stopped() const {
+        return stop.load() || (external_stop && external_stop->load());
     }
 
     CaptureResult fail(const std::string& message) {
@@ -194,9 +199,13 @@ std::vector<CameraDeviceInfo> CameraCapture::enumerate_devices() {
     return devices;
 }
 
-void CameraCapture::open(const CameraConfig& config) {
+void CameraCapture::open(const CameraConfig& config, const std::atomic<bool>* stop_requested) {
     close();
     validate(config);
+    impl_->external_stop = stop_requested;
+    if (impl_->external_stop && impl_->external_stop->load()) {
+        throw std::runtime_error("camera open cancelled");
+    }
     impl_->stop.store(false);
     impl_->failed = false;
     impl_->error.clear();
@@ -265,13 +274,13 @@ void CameraCapture::open(const CameraConfig& config) {
 
 CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds timeout) {
     frame = {};
-    if (impl_->stop.load()) { return CaptureResult::Stopped; }
+    if (impl_->stopped()) { return CaptureResult::Stopped; }
     if (impl_->failed) { return CaptureResult::Failed; }
     if (!impl_->input) { return impl_->fail("camera is not open"); }
     if (timeout.count() < 0) { throw std::invalid_argument("negative capture timeout"); }
     const auto deadline = Clock::now() + timeout;
     for (;;) {
-        if (impl_->stop.load()) { return CaptureResult::Stopped; }
+        if (impl_->stopped()) { return CaptureResult::Stopped; }
         const int received = avcodec_receive_frame(impl_->decoder, impl_->decoded);
         if (received == 0) {
             impl_->deliver(frame);
@@ -281,7 +290,7 @@ CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds 
             return impl_->fail("receive camera frame: " + error_text(received));
         }
         const int result = av_read_frame(impl_->input, impl_->packet);
-        if (impl_->stop.load()) {
+        if (impl_->stopped()) {
             av_packet_unref(impl_->packet);
             return CaptureResult::Stopped;
         }
@@ -289,7 +298,7 @@ CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds 
             if (Clock::now() >= deadline) { return CaptureResult::Timeout; }
             std::unique_lock<std::mutex> lock(impl_->wait_mutex);
             impl_->wake.wait_until(lock, std::min(deadline, Clock::now() + std::chrono::milliseconds(5)),
-                [this] { return impl_->stop.load(); });
+                [this] { return impl_->stopped(); });
             continue;
         }
         if (result < 0) { return impl_->fail("read camera (device lost or input failed): " + error_text(result)); }
@@ -317,6 +326,7 @@ void CameraCapture::close() {
     av_packet_free(&impl_->packet);
     avcodec_free_context(&impl_->decoder);
     avformat_close_input(&impl_->input);
+    impl_->external_stop = nullptr;
     impl_->stream_index = -1;
     impl_->actual = {};
 }

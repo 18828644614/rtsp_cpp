@@ -1,5 +1,26 @@
 # 学习记录（Learnings）
 
+## [LRN-20261109-CVS] best_practice
+
+**Logged**: 2026-11-09
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### 摘要（Summary）
+实时源应由消费者锁定 EOF；Windows 设备资源的打开和关闭应保留同线程生命周期。
+
+### 详情（Details）
+`read(false)` 后生产者可能推入最后一帧并关闭，直接从生产者完成标记实现 `ended()` 会丢失最后一帧。应由带锁队列读操作确认“关闭且空”，再锁定消费者终态。DirectShow 设备适配器延迟到工作线程打开，并在同线程关闭；额外使用外部原子停止标记，避免打开初始化覆盖并发停止。
+
+### 建议行动（Suggested Action）
+新增实时输入时沿用队列原子状态读取和输入线程生命周期契约，通过可控制的无硬件输入验证等待、排空、错误与停止。
+
+### 元数据（Metadata）
+- Source: conversation
+- Related Files: src/media/camera_video_source.cpp, src/media/video_frame_queue.cpp, src/media/camera_capture_input.cpp
+- Tags: live-source, eof, concurrency, lifecycle
+
 ## [LRN-20261021-001] correction
 
 **Logged**: 2026-10-21

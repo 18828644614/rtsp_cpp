@@ -34,6 +34,7 @@ add_library(rtsp_core STATIC
     src/media/aac_file_reader.cpp
     src/media/aac_packetizer.cpp
     src/media/file_video_source.cpp
+    src/media/video_frame_queue.cpp
     src/media/media_session.cpp
     src/media/h264_file_writer.cpp
 )
@@ -53,12 +54,17 @@ option(ENABLE_CAMERA_CAPTURE "Build the standalone FFmpeg/DirectShow camera prob
 if(ENABLE_CAMERA_CAPTURE)
     include(cmake/CameraCapture.cmake)
 endif()
-option(ENABLE_H264_ENCODING "Build the standalone FFmpeg/libx264 encoder and probe" OFF)
+option(ENABLE_H264_ENCODING "Build the FFmpeg/libx264 encoder, live video source and probe" OFF)
 if(ENABLE_H264_ENCODING)
     include(cmake/H264Encoding.cmake)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(video_frame_queue_tests tests/video_frame_queue_tests.cpp)
+    target_link_libraries(video_frame_queue_tests PRIVATE rtsp_core)
+    add_test(NAME video_frame_queue_tests COMMAND video_frame_queue_tests)
+    set_tests_properties(video_frame_queue_tests PROPERTIES TIMEOUT 20)
+
     add_executable(runtime_tests tests/runtime_tests.cpp)
     target_link_libraries(runtime_tests PRIVATE rtsp_core)
     add_test(NAME runtime_tests COMMAND runtime_tests)

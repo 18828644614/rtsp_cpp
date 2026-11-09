@@ -264,6 +264,98 @@ void test_injected_file_source() {
           "injected file source did not finish normally");
 }
 
+class WaitingSource final : public rtsp::VideoSource {
+public:
+    bool read(rtsp::H264AccessUnit& frame) override {
+        frame = {};
+        ++reads;
+        if (fail) { throw std::runtime_error("simulated live input failure"); }
+        if (!ready) { return false; }
+        ready = false;
+        frame = {{std::string("\x65\x30", 2)}, true, 0, 3000};
+        return true;
+    }
+    bool ended() const override { return eof; }
+    const rtsp::MediaTrack& track() const override { return track_; }
+    bool is_live() const override { return true; }
+    void resume() override { ++resumes; }
+    void stop() override { stopped = true; }
+    bool ready = false;
+    bool eof = false;
+    bool fail = false;
+    bool stopped = false;
+    int reads = 0;
+    int resumes = 0;
+private:
+    rtsp::MediaTrack track_;
+};
+
+void test_live_waiting_and_end() {
+    for (bool failure : {false, true}) {
+        auto input = std::make_unique<WaitingSource>();
+        auto* source = input.get();
+        rtsp::MediaSession media(std::move(input));
+        const auto start = Clock::now();
+        media.tick(start);
+        check(source->reads == 0 && !media.next_deadline(), "idle live source advanced");
+        Peer peer;
+        check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+              "live subscription rejected");
+        media.tick(start);
+        check(!media.ended() && !peer.queue->closed() && !peer.subscription->finished()
+                  && media.next_deadline() == start + std::chrono::milliseconds(5),
+              "Waiting caused EOF or busy polling");
+        source->ready = true;
+        media.tick(start + std::chrono::milliseconds(5));
+        check(!media.ended() && !peer.queue->closed(), "frame followed by Waiting ended live source");
+        if (failure) { source->fail = true; }
+        else { source->eof = true; }
+        media.tick(start + std::chrono::milliseconds(10));
+        check(media.ended() && source->stopped && peer.queue->closed()
+                  && peer.subscription->failed() == failure,
+              "live EOF/failure did not stop source and subscription");
+        bool saw_rtp = false;
+        bool saw_final = false;
+        rtsp::net::OutboundMessage message;
+        while (peer.queue->try_pop(message)) {
+            saw_rtp = saw_rtp || message.kind == rtsp::net::OutboundKind::Rtp;
+            saw_final = saw_final || message.final_rtcp;
+        }
+        check(saw_rtp && saw_final == !failure, "live waiting or failure corrupted final RTCP");
+    }
+}
+
+void test_live_wait_with_future_audio() {
+    const std::string audio_path = "media_session_live_wait.aac";
+    {
+        std::ofstream output(audio_path, std::ios::binary);
+        const std::string adts("\xff\xf1\x4c\x80\x01\x5f\xfc\x11\x22\x33", 10);
+        output << adts << adts;
+        check(static_cast<bool>(output), "failed to save live-wait audio");
+    }
+    auto input = std::make_unique<WaitingSource>();
+    auto* source = input.get();
+    rtsp::MediaSession media(std::move(input), audio_path);
+    check(std::remove(audio_path.c_str()) == 0, "audio input stayed open");
+    Peer peer;
+    peer.subscription->add_track(1, media.description().tracks[1], {2, 3}, 200, 2);
+    check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "live audio/video PLAY failed");
+    const auto now = Clock::now();
+    media.tick(now);
+    check(media.next_deadline() == now + std::chrono::milliseconds(5) && !media.ended(),
+          "future audio suppressed short video retry");
+    source->ready = true;
+    media.tick(now + std::chrono::milliseconds(5));
+    check(media.next_deadline() == now + std::chrono::milliseconds(10),
+          "video retry was lost after IDR");
+    media.tick(now + std::chrono::milliseconds(30));
+    check(!media.ended(), "audio EOF ended waiting live video");
+    source->eof = true;
+    media.tick(now + std::chrono::milliseconds(40));
+    check(media.ended() && !peer.subscription->failed(), "live video EOF failed after audio drained");
+}
+
 // 同一个测试线程驱动收发，验证控制阶段和播放阶段都能安全关闭。
 void test_connection_stop(bool playing) {
     save_sample(20, 5);
@@ -320,6 +412,8 @@ int main() {
         test_slow_peer_and_waiting_at_eof();
         test_failed_admission_and_idle_stop();
         test_injected_file_source();
+        test_live_waiting_and_end();
+        test_live_wait_with_future_audio();
         test_connection_stop(false);
         test_connection_stop(true);
         std::remove(input_path.c_str());

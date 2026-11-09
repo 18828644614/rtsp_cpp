@@ -53,6 +53,14 @@ void configuration_tests() {
     capture.close();
     capture.close();
     check(capture.format().width == 0, "closed format must be cleared");
+    std::atomic<bool> cancelled{true};
+    bool rejected_cancelled_open = false;
+    try { capture.open(rtsp::CameraConfig{}, &cancelled); }
+    catch (const std::runtime_error& error) {
+        rejected_cancelled_open = std::string(error.what()) == "camera open cancelled";
+    }
+    check(rejected_cancelled_open, "opening reset an external stop request");
+    capture.close();
 }
 
 void hardware_tests(const std::string& device) {

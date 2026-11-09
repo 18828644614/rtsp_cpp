@@ -289,6 +289,10 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
     }
 
     if (!had_active) {
+        if (video_source_ && video_source_->is_live()) {
+            video_.reset();
+            video_source_->resume();
+        }
         reset_clock_ = true;
         next_deadline_ = Clock::now();
     }
@@ -312,7 +316,9 @@ const MediaClock& MediaSession::clock() const {
 }
 
 void MediaSession::finish(bool failed) {
+    if (ended_) { return; }
     ended_ = true;
+    if (video_source_) { video_source_->stop(); }
     next_deadline_.reset();
     video_.reset();
     audio_.reset();
@@ -370,7 +376,13 @@ void MediaSession::tick(Clock::time_point now) {
                 }
             }
             if (!video_ && !audio_) {
-                finish(false);
+                if ((!video_source_ || video_source_->ended())
+                    && (!audio_source_ || audio_source_->ended())) {
+                    finish(false);
+                } else {
+                    // 实时队列为空不代表 EOF；避免忙轮询，也不阻塞网络事件处理。
+                    next_deadline_ = now + std::chrono::milliseconds(5);
+                }
                 return;
             }
             bool send_video = false;
@@ -387,6 +399,11 @@ void MediaSession::tick(Clock::time_point now) {
             }
             next_deadline_ = clock_origin_ + media_time;
             if (now < *next_deadline_) {
+                if (!video_ && video_source_ && !video_source_->ended()) {
+                    // 音频已有未来帧时，也要短期重查尚未就绪的视频。
+                    const auto retry = now + std::chrono::milliseconds(5);
+                    if (retry < *next_deadline_) { next_deadline_ = retry; }
+                }
                 return;
             }
             for (const auto& subscriber : subscribers) {
