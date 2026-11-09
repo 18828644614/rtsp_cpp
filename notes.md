@@ -152,3 +152,11 @@
 - 独立 PowerShell 模拟服务器验证客户端七种场景：Content-Base、Content-Location、请求 URL 回退、错误 CSeq、改变 Session、错误 Transport、提前 EOF。成功场景使用 payload 104、Session 参数、10/11 通道和夹在控制响应之间的交织帧。
 - 独立原始 TCP 客户端验证服务器：拒绝无 Session 的 PLAY 和 UDP SETUP 后仍可继续正常会话；协商 6/7 通道；跳过已知 RTCP 通道帧；TEARDOWN 后无需客户端 EOF 即正常关闭。
 - 验证工具与可执行产物在忽略目录 `.verify/`，正式会话单元测试已注册到 CMake。未实际执行 CMake/CTest，未安装工具或使用 FFmpeg。
+# 阶段 5 接入记录（2026-11-09）
+
+- 接入前 RtspServer 仅有文件路径构造，内部创建共享 MediaSession；现已新增 VideoSource 所有权注入，复用连接和事件循环。
+- CameraVideoSource 启动握手已从真实编码 SPS/PPS 生成 fmtp，MediaSubscription 已等待 IDR 并隔离出站队列失败。
+- camera_video_source 构建仅在 ENABLE_H264_ENCODING 开启时存在；真实工厂还要求 ENABLE_CAMERA_CAPTURE。现已按开关链接服务器并复制 DLL。
+- 复用既有文件位置参数；新增 --camera 编号 / --device 名称和最小图像/编码参数；Windows 参数使用宽字符转 UTF-8。
+- 回归：默认 16/16、仅编码 22/22、采集加编码 25/25；FFmpeg 双客户端解码 90/30 帧，晚加入与第 18 帧起画面匹配且无解码错误。
+- 当前真实设备枚举为 0，实机画面、首帧延迟及物理拔出待验收；交付说明见 camera_rtsp_implementation.md。

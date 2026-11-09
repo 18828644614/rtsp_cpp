@@ -16,6 +16,11 @@ RtspServer::RtspServer(std::string address, std::uint16_t port, std::string vide
     : address_(std::move(address)), port_(port), options_(options),
       media_session_(std::make_shared<MediaSession>(video_path, audio_path)) {}
 
+RtspServer::RtspServer(std::string address, std::uint16_t port,
+                       std::unique_ptr<VideoSource> video_source, RuntimeOptions options)
+    : address_(std::move(address)), port_(port), options_(options),
+      media_session_(std::make_shared<MediaSession>(std::move(video_source))) {}
+
 RtspServer::~RtspServer() {
     stop();
     // 调用者须先等待 run() 返回；对象不能在运行线程仍访问它时析构。

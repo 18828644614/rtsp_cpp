@@ -17,7 +17,7 @@ namespace rtsp {
 // NALU 3: 68 ee
 class H264FileReader {
 public:
-    //根据h264文件中的NALU，将他们根据类型为 AUD(9) 进行分割成访问单元 (H264AccessUnit)
+    // UTF-8 路径；根据 AUD(9) 将 NALU 分割成访问单元 (H264AccessUnit)。
     void open(const std::string& path);
     bool read(H264AccessUnit& frame);
     std::string sps() const;

@@ -1,6 +1,7 @@
 #include "media/h264_file_reader.h"
 
 #include <fstream>
+#include <filesystem>
 #include <stdexcept>
 #include <utility>
 
@@ -35,7 +36,7 @@ void H264FileReader::open(const std::string& path) {
     sps_.clear();
     pps_.clear();
 
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary | std::ios::ate);
     if (!input) {
         throw std::runtime_error("cannot open H264 input: " + path);
     }

@@ -345,3 +345,25 @@ error C2039: "H264FileReader": 不是 "rtsp" 的成员
 - **Notes**: 已直接包含 h264_file_reader.h，Debug 构建成功，13/13 CTest 和现有 FFmpeg 文件传输解码验证全部通过。
 
 ---
+## [ERR-20261109-RTSP5] camera-network-test-build
+
+**Logged**: 2026-11-09
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### 摘要（Summary）
+新增网络测试误用不存在的 RTCP 枚举；环境检查使用了 PowerShell 不展开的路径通配符。
+
+### 原始错误（Error）
+```text
+error C2039: "RtcpBye": 不是 "rtsp" 的成员
+rg: build*/CMakeCache.txt: IO error for operation on build*/CMakeCache.txt
+```
+
+### 解决情况（Resolution）
+检查 rtcp_packet.h 后使用包类型 203 判断 BYE；rg 改为显式列出构建缓存路径。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: tests/camera_rtsp_tests.cpp

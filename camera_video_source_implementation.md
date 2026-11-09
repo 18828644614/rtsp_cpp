@@ -103,7 +103,7 @@ auto media = std::make_shared<rtsp::MediaSession>(std::move(source));
 
 自定义输入只需实现 `CameraFrameInput`，返回 `CameraFrame`。专项测试的 `GeneratedInput` 演示了无摄像头用法，真正使用 libx264 编码，随后进入同一个 `MediaSession`。
 
-本阶段交付到 `MediaSession`；服务器摄像头命令行、VLC/ffplay 连接和多客户端实机播放仍属于阶段 5。首个 IDR 的轨道配置准备已经完成，但尚未执行真实设备的 SDP/RTSP 播放验收。
+本阶段交付到 `MediaSession`；服务器摄像头命令行和多客户端网络接入现已在阶段 5 完成，见 [摄像头 RTSP 输出实现说明](camera_rtsp_implementation.md)。真实设备和 VLC/ffplay 现场播放仍待验收。
 
 ## 无硬件验证
 

@@ -259,6 +259,27 @@ void test_idle_and_session_stop() {
     check(decode_output(resumed) == 1, "resume delivered stale prefetched P frame");
 }
 
+void test_startup_cancellation() {
+    auto state = std::make_shared<InputState>();
+    state->credits = 0;
+    std::atomic<bool> stopped{false};
+    std::exception_ptr failure;
+    std::thread constructor([&] {
+        try {
+            rtsp::CameraVideoSource camera(std::make_unique<GeneratedInput>(state), config(), &stopped);
+        } catch (...) { failure = std::current_exception(); }
+    });
+    // 不在生产线程停止前读取未加锁的 reader/closed。
+    std::this_thread::sleep_for(30ms);
+    stopped.store(true);
+    constructor.join();
+    bool cancelled = false;
+    try { if (failure) { std::rethrow_exception(failure); } }
+    catch (const std::runtime_error& error) { cancelled = std::string(error.what()) == "camera startup stopped"; }
+    check(cancelled, "startup did not observe console stop");
+    check_released(state);
+}
+
 #ifdef RTSP_TEST_CAMERA_CAPTURE
 void test_capture_adapter_without_device() {
     auto input = rtsp::make_camera_capture_input({});
@@ -287,6 +308,7 @@ int main() {
         test_media_session(false);
         test_media_session(true);
         test_idle_and_session_stop();
+        test_startup_cancellation();
 #ifdef RTSP_TEST_CAMERA_CAPTURE
         test_capture_adapter_without_device();
 #endif

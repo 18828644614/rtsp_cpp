@@ -15,11 +15,15 @@ namespace rtsp {
 
 class RtspServerConnection;
 class MediaSession;
+class VideoSource;
 
 class RtspServer {
 public:
     RtspServer(std::string address, std::uint16_t port, std::string video_path,
                std::string audio_path = "", RuntimeOptions options = {});
+    // 服务器接管一个视频源；所有连接共享同一个 MediaSession。
+    RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
+               RuntimeOptions options = {});
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;

@@ -2,7 +2,7 @@
 
 这是一个面向新手的协议学习项目：自己实现 RTSP 会话控制、RTP 收发，以及 H.264 / AAC 的封包和解包。
 
-当前已完成实施路线的 **第 1～6 步**，以及演进路线的 **阶段 1～3、阶段 5 TCP 基础版、阶段 6 TCP 事件循环版和阶段 7 TCP 基本 RTCP/保活版**。服务器只加载一次媒体文件，由一个 `select` 事件循环统一处理监听、所有客户端收发和媒体定时任务。每个客户端保留独立的 RTSP 会话、RTP 状态和有界出站队列；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。允许包含 B 帧，当前时间戳仍是按解码顺序生成的简化时间，不处理真实 PTS/DTS 和实时显示同步。
+当前已完成实施路线的 **第 1～6 步**，以及演进路线的 **阶段 1～3、阶段 5 TCP 基础版、阶段 6 TCP 事件循环版和阶段 7 TCP 基本 RTCP/保活版**。服务器共享一个文件或实时媒体源，由一个 `select` 事件循环统一处理监听、所有客户端收发和媒体定时任务。每个客户端保留独立的 RTSP 会话、RTP 状态和有界出站队列；队列满时只终止对应的慢客户端。客户端解包并保存 `received.h264`。文件模式允许包含 B 帧，时间戳仍按解码顺序简化生成；摄像头模式无 B 帧，使用编码源的真实时间。
 
 事件循环框架和阅读顺序见 [事件循环与非阻塞网络实现说明](event_loop_implementation.md)。当前最多接受 `FD_SETSIZE - 1` 个客户端，默认 63 个。SETUP 后声明 `Session: id;timeout=60`，客户端通过有效会话请求或匹配的 RTCP RR 续期；自带客户端会定时保活。发送连续 2 秒无进展或收尾超过 2 秒时回收连接。详见 [RTCP、保活与运行时实现说明](rtcp_runtime_implementation.md)。
 
@@ -14,7 +14,16 @@ USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 
 
 摄像头阶段 3 已增加可选 `H264Encoder` 和独立 `h264_encode_probe`：将 YUYV422/BGR24 原始帧转成 YUV420P，再用 libx264 输出带 SPS/PPS、IDR 和 90 kHz 时间的完整 H.264 访问单元。`ENABLE_H264_ENCODING=ON` 可以独立构建，用生成帧完成无摄像头的编码/解码验证；同时开启采集选项可接真实设备。构建、时间规则和验收见 [H.264 编码阶段 3 实现说明](h264_encoder_implementation.md)。
 
-摄像头阶段 4 已增加 `CameraVideoSource`、采集/编码工作线程和同时限制帧数/字节数的 `VideoFrameQueue`；队列溢出后等待 IDR，重新有观看者时从最新可用 IDR 恢复。`MediaSession` 暂时无帧时在 5 ms 后重试，正常结束和失败分别收尾，停止时回收生产线程。已提供生成帧输入及 RTP 重组后的真实解码测试；模块接口、构建和验证说明见 [CameraVideoSource 阶段 4 实现说明](camera_video_source_implementation.md)。服务器摄像头入口和实机播放器验收留待阶段 5。
+摄像头阶段 4 已增加 `CameraVideoSource`、采集/编码工作线程和同时限制帧数/字节数的 `VideoFrameQueue`；队列溢出后等待 IDR，重新有观看者时从最新可用 IDR 恢复。`MediaSession` 暂时无帧时在 5 ms 后重试，正常结束和失败分别收尾，停止时回收生产线程。模块接口、构建和验证说明见 [CameraVideoSource 阶段 4 实现说明](camera_video_source_implementation.md)。
+
+摄像头阶段 5 已接通服务器入口和真实 RTSP/TCP：支持 `--list-cameras`、`--camera INDEX` 或 `--device NAME` 以及图像/编码参数，多个客户端共享一路采集编码。生成帧的 TCP 首帧/晚加入/慢连接/释放测试和独立 FFmpeg 双客户端解码通过；当前枚举设备为 0，真实摄像头及 VLC/ffplay 现场验收待补。构建、命令和验证记录见 [摄像头 RTSP 阶段 5 实现说明](camera_rtsp_implementation.md)。
+
+```powershell
+# 需要同时开启 ENABLE_CAMERA_CAPTURE 和 ENABLE_H264_ENCODING 构建
+.\build-camera-encoder\Debug\rtsp_server.exe --list-cameras
+.\build-camera-encoder\Debug\rtsp_server.exe --camera 0 --bind 0.0.0.0 --port 8554
+ffplay -rtsp_transport tcp rtsp://127.0.0.1:8554/live
+```
 
 **演进阶段 5 的 TCP 多轨道基础实现。** 可以给服务器额外传入 ADTS AAC-LC 文件，同时发送 H.264 和 AAC；每条轨道独立 SETUP、RTP 状态和 TCP 通道，当前由事件循环统一调度。UDP 延后。简单框架、代码阅读顺序和边界见 [TCP 多轨道与 AAC 实现说明](tcp_aac_implementation.md)。
 
@@ -144,7 +153,7 @@ RTSP session completed.
 
 上例 Session 和访问单元数量仅作示意。服务路径固定为 `/live`，视频轨道为 `/live/trackID=0`。客户端按协商通道分流，RTP 进入 H.264 解包器，RTCP 校验包结构与 SR 的 SSRC；SETUP 前的交织帧、未知通道、错误 PT、序号不连续或 SSRC 改变都会报错。正常结束时服务器在已有 RTP 后发送最终 SR/SDES/BYE，再关闭发送方向；客户端检查 TCP 解析器、未完成 FU-A 和最后一个 Marker 后关闭输出文件。
 
-默认构建只需要 C++17 编译器、CMake 和 Windows Socket，客户端、服务器和原有 CTest 不链接 FFmpeg；FFmpeg/ffplay 仍可用于准备视频和外部解码验收。有 PowerShell 时会自动注册双进程集成测试。显式开启 `ENABLE_CAMERA_CAPTURE` 或 `ENABLE_H264_ENCODING` 后，对应独立目标才需要 FFmpeg 开发库和 DLL，编码还需 SDK 提供 libx264 和 swscale。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
+默认构建只需要 C++17 编译器、CMake 和 Windows Socket，客户端、服务器和原有 CTest 不链接 FFmpeg；FFmpeg/ffplay 可用于准备视频和外部解码验收。有 PowerShell 时会自动注册双进程集成测试。开启 `ENABLE_CAMERA_CAPTURE` 后，采集目标及服务器设备枚举需要 FFmpeg 开发库和 DLL；同时开启 `ENABLE_H264_ENCODING` 后服务器支持摄像头推流，SDK 还需提供 libx264 和 swscale。仅编码构建可运行全部无设备网络测试，文件版服务器仍不链接 FFmpeg。客户端和服务器均只支持数字 IPv4 地址，例如 `127.0.0.1`，暂不解析 `localhost` 等主机名。
 
 ### 从这里阅读代码
 

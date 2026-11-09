@@ -36,7 +36,9 @@ struct CameraVideoSourceConfig {
 class CameraVideoSource final : public VideoSource {
 public:
     // 输入已配置。限时等待首个可入队的 IDR/SPS/PPS，失败时停止并回收线程。
-    CameraVideoSource(std::unique_ptr<CameraFrameInput> input, CameraVideoSourceConfig config = {});
+    // stop_requested 只在构造期读取，允许 Ctrl+C 中止首帧等待。
+    CameraVideoSource(std::unique_ptr<CameraFrameInput> input, CameraVideoSourceConfig config = {},
+                      const std::atomic<bool>* stop_requested = nullptr);
     ~CameraVideoSource() override;
     CameraVideoSource(const CameraVideoSource&) = delete;
     CameraVideoSource& operator=(const CameraVideoSource&) = delete;

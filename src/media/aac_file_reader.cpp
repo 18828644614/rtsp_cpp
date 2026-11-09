@@ -1,6 +1,7 @@
 #include "media/aac_file_reader.h"
 
 #include <fstream>
+#include <filesystem>
 #include <stdexcept>
 
 namespace rtsp {
@@ -34,7 +35,7 @@ void AacFileReader::open(const std::string& path) {
     track_.control = "trackID=1";
     track_.payload_type = 97;
 
-    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    std::ifstream input(std::filesystem::u8path(path), std::ios::binary | std::ios::ate);
     if (!input) {
         throw std::runtime_error("cannot open AAC input: " + path);
     }

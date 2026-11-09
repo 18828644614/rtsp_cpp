@@ -29,6 +29,12 @@ endif()
 copy_ffmpeg_runtime(h264_encode_probe)
 
 if(BUILD_TESTING)
+    add_executable(camera_rtsp_tests tests/camera_rtsp_tests.cpp)
+    target_link_libraries(camera_rtsp_tests PRIVATE camera_video_source FFmpeg::avcodec FFmpeg::avutil)
+    copy_ffmpeg_runtime(camera_rtsp_tests)
+    add_test(NAME camera_rtsp_tests COMMAND camera_rtsp_tests)
+    set_tests_properties(camera_rtsp_tests PROPERTIES TIMEOUT 45)
+
     add_executable(camera_video_source_tests tests/camera_video_source_tests.cpp)
     target_link_libraries(camera_video_source_tests PRIVATE camera_video_source FFmpeg::avcodec FFmpeg::avutil)
     if(ENABLE_CAMERA_CAPTURE)

@@ -1,5 +1,6 @@
 #include "media/camera_video_source.h"
 
+#include <algorithm>
 #include <stdexcept>
 #include <utility>
 
@@ -12,7 +13,8 @@ namespace rtsp {
 // input	原始图像的输入对象，负责提供 CameraFrame
 // config	编码参数、队列容量、启动超时、读取超时等配置
 CameraVideoSource::CameraVideoSource(std::unique_ptr<CameraFrameInput> input,
-                                     CameraVideoSourceConfig config)
+                                     CameraVideoSourceConfig config,
+                                     const std::atomic<bool>* stop_requested)
     : input_(std::move(input)), config_(config), queue_(config.queue) {
     if (!input_ || config.startup_timeout.count() <= 0 || config.read_timeout.count() <= 0) {
         throw std::invalid_argument("camera source requires input and positive timeouts");
@@ -20,9 +22,17 @@ CameraVideoSource::CameraVideoSource(std::unique_ptr<CameraFrameInput> input,
     worker_ = std::thread(&CameraVideoSource::produce, this);
     try {
         std::unique_lock<std::mutex> lock(startup_mutex_);
-        if (!startup_wake_.wait_for(lock, config_.startup_timeout,
-                                   [this] { return ready_ || producer_done_; })) {
-            throw std::runtime_error("camera startup timed out waiting for IDR/SPS/PPS");
+        const auto deadline = std::chrono::steady_clock::now() + config_.startup_timeout;
+        while (!ready_ && !producer_done_) {
+            if (stop_requested && stop_requested->load()) {
+                throw std::runtime_error("camera startup stopped");
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                throw std::runtime_error("camera startup timed out waiting for IDR/SPS/PPS");
+            }
+            // 控制处理线程只置标记；构造线程负责通知输入并回收生产线程。
+            startup_wake_.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(20)));
         }
         if (!ready_) {
             if (startup_error_) { std::rethrow_exception(startup_error_); }
