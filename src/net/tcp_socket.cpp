@@ -167,14 +167,17 @@ IoResult TcpSocket::receive_some(char* buffer, std::size_t capacity) {
         throw std::invalid_argument("receive_some requires open socket and buffer");
     }
     const int length = capacity > 65536 ? 65536 : static_cast<int>(capacity);
+    // 当 recv() 被中断（WSAEINTR）时，重新尝试读取
     for (;;) {
         const int count = ::recv(handle_, buffer, length, 0);
         if (count > 0) {
             return {IoStatus::Done, static_cast<std::size_t>(count)};
         }
+        // 表示对端已经关闭发送方向
         if (count == 0) {
             return {IoStatus::Eof, 0};
         }
+        // 表示当前暂时没有更多数据。直接返回，等待下一次可读事件。
         const int error = WSAGetLastError();
         if (error == WSAEWOULDBLOCK) {
             return {IoStatus::WouldBlock, 0};

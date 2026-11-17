@@ -22,6 +22,7 @@ class MediaSubscription;
 class RtspServerConnection {
 public:
     using Clock = std::chrono::steady_clock;
+    // 这行代码的作用是：创建一个管理单个客户端连接的对象，准备好它的会话状态、发送队列和超时配置。
     explicit RtspServerConnection(std::shared_ptr<MediaSession> media_session,
                                   RuntimeOptions options = {});
     ~RtspServerConnection();
@@ -30,7 +31,9 @@ public:
     RtspServerConnection& operator=(const RtspServerConnection&) = delete;
 
     bool accept_from(net::TcpSocket& listener);
+    // 从 Socket 读取数据 → 解析请求或 RTCP → 处理
     void on_readable();
+    // 从发送队列取数据 → 发送到 Socket
     void on_writable();
 
     // 检查这个连接是否还能继续工作、是否该进入收尾，以及是否因为长时间没有进展而需要关闭。
@@ -40,12 +43,18 @@ public:
     std::optional<Clock::time_point> next_deadline() const;
 
     bool wants_read() const;
+    // 有正在发送但尚未发完的消息
+    // 或者
+    // 队列中还有待发消息
     bool wants_write() const;
     bool finished() const;
     SOCKET native_handle() const;
     const std::string& session_id() const;
 
 private:
+    // | `Open` | 正常工作，可以接收请求、发送数据 |
+    // | `Draining` | 正在收尾，停止接收请求，尽量发完已有数据 |
+    // | `Closed` | Socket 已关闭 |
     enum class State { Open, Draining, Closed };
     void handle_item(const RtspStreamItem& item);
     void begin_drain(Clock::time_point now = Clock::now());
@@ -70,7 +79,9 @@ private:
     // 当前消息已经发送了多少字节
     std::size_t send_offset_ = 0;
     Clock::time_point last_read_ = Clock::now();
+    // 最近一次发送取得进展的时间
     Clock::time_point last_progress_ = Clock::now();
+    // 当前是否正在跟踪一段待发送过程
     bool waiting_write_ = false;
 };
 

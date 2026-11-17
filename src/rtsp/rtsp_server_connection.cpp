@@ -299,10 +299,12 @@ void RtspServerConnection::check_timeout(Clock::time_point now) {
         // 停止继续生产和接收新请求，把已有输出发完后再关闭。
         begin_drain(now);
     }
+    // 检查 RTSP 会话是否到期
     if (state_ == State::Open && session_deadline_ && now >= *session_deadline_) {
         std::cout << "Session " << session_id_ << " expired" << std::endl;
         begin_drain(now);
     }
+    // 默认最多给收尾 2 秒。到了期限，即使还有数据没发完，也关闭连接。
     if (state_ == State::Draining && now >= *drain_deadline_) {
         close();
         return;

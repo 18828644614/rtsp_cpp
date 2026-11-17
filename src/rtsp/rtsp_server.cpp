@@ -45,6 +45,7 @@ void RtspServer::run(const std::atomic<bool>* stop_requested) {
                   << bound_port_.load() << std::endl;
         while (!should_stop()) {
             const auto now = MediaSession::Clock::now();
+            // 计算 deadline 时间
             media_session_->tick(now);
             for (auto& connection : connections_) {
                 connection->check_timeout(now);
@@ -61,11 +62,19 @@ void RtspServer::run(const std::atomic<bool>* stop_requested) {
 
             // 最多等待 50 ms，外部 stop() 只设标记，无需跨线程操作 Socket。
             int timeout_ms = 50;
+            // 共享媒体下一次什么时候需要处理
+            // std::optional<Clock::time_point>
+            // 意思是“可能有一个时刻，也可能没有”。
+            // 这里的 if 判断的是有没有值：
+            // - 有值：进入代码块，计算剩余时间。
+            // - 没值：跳过，保留原来的 timeout_ms。
             if (const auto deadline = media_session_->next_deadline()) {
                 const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
                     *deadline - MediaSession::Clock::now()).count();
+                // 将等待时间限制在 0 到当前上限之间
                 timeout_ms = static_cast<int>(std::clamp<long long>(remaining, 0, timeout_ms));
             }
+            // 这个客户端连接下一次什么时候需要维护
             for (const auto& connection : connections_) {
                 if (const auto deadline = connection->next_deadline()) {
                     const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(
@@ -73,6 +82,8 @@ void RtspServer::run(const std::atomic<bool>* stop_requested) {
                     timeout_ms = static_cast<int>(std::clamp<long long>(remaining, 0, timeout_ms));
                 }
             }
+
+            // 得到可读或者可写的客户端列表
             const auto events = event_loop_.wait(timeout_ms);
             if (should_stop()) {
                 break;
@@ -96,6 +107,7 @@ void RtspServer::run(const std::atomic<bool>* stop_requested) {
                     }
                     continue;
                 }
+                // 在连接中找到对应的 event 的 socket
                 for (auto& connection : connections_) {
                     if (connection->finished() || connection->native_handle() != event.socket) {
                         continue;
