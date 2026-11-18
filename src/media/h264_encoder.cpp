@@ -144,6 +144,7 @@ struct H264Encoder::Impl {
         if (failed) { throw std::logic_error("H264 encoder failed; reopen it before use"); }
     }
 
+    // 为当前输入图像计算显示时间戳 pts 和持续时间 duration，统一换算到 90 kHz 时间基，并检查时间是否有效。
     Timing timing(const CameraFrame& frame) const {
         const bool has_time_base = frame.time_base_num > 0 && frame.time_base_den > 0;
         if ((frame.source_pts || frame.source_duration != 0) && !has_time_base) {
@@ -344,7 +345,7 @@ std::vector<H264AccessUnit> H264Encoder::encode(const CameraFrame& frame) {
     impl_->require_open();
     if (impl_->flushed) { throw std::logic_error("cannot encode after flush; reopen encoder"); }
 
-    // 取得配置和底层原始图像
+    // 取得原始图像，检查尺寸、格式和行跨度
     const auto& config = impl_->config;
     const auto* input = frame.buffer.get();
 
@@ -367,13 +368,19 @@ std::vector<H264AccessUnit> H264Encoder::encode(const CameraFrame& frame) {
     const auto timing = impl_->timing(frame);
     std::vector<H264AccessUnit> output;
     try {
+        // 缓冲区可以安全修改时，直接复用。
+        // 缓冲区仍被共享时，必要时分配独立存储，使当前帧可以安全写入。
         require_success(av_frame_make_writable(impl_->converted), "make encoder frame writable");
         const int rows = sws_scale(impl_->converter, input->data, input->linesize,
             0, config.height, impl_->converted->data, impl_->converted->linesize);
         if (rows != config.height) { throw std::runtime_error("incomplete encoder pixel conversion"); }
+
         impl_->converted->pts = timing.pts;
         impl_->converted->duration = timing.duration;
+
+        // 将这张 YUV420P 原始图像提交给 libx264 编码器
         int sent = avcodec_send_frame(impl_->codec, impl_->converted);
+        // 当前不能接收新图像，需要先取走已有编码输出。
         if (sent == AVERROR(EAGAIN)) {
             impl_->receive(output);
             sent = avcodec_send_frame(impl_->codec, impl_->converted);

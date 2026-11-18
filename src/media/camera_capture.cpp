@@ -272,7 +272,16 @@ void CameraCapture::open(const CameraConfig& config, const std::atomic<bool>* st
     }
 }
 
+// av_read_frame(impl_->input, impl_->packet);
+// 从摄像头输入读取一个数据包，放进 packet。
+// avcodec_send_packet(impl_->decoder, impl_->packet);
+// 把这个包交给解码器作为输入。成功表示解码器接受了数据，图像需要通过下一步获取。
+// avcodec_receive_frame(impl_->decoder, impl_->decoded);
+// 从解码器获取解码后的图像，放进 decoded。返回 0 时，才表示成功获得了一张画面。
 CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds timeout) {
+    // | `decoder` | 保存解码器配置、内部状态，以及尚未取出的解码结果等 |
+    // | `packet`  | 接收从摄像头输入读取到的数据包 |
+    // | `decoded` | 接收从解码器取出的图像及其属性 |
     frame = {};
     if (impl_->stopped()) { return CaptureResult::Stopped; }
     if (impl_->failed) { return CaptureResult::Failed; }
@@ -281,11 +290,13 @@ CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds 
     const auto deadline = Clock::now() + timeout;
     for (;;) {
         if (impl_->stopped()) { return CaptureResult::Stopped; }
+        // 使用这个解码器，尝试取出一张解码后的图像，把结果放进 impl_->decoded
         const int received = avcodec_receive_frame(impl_->decoder, impl_->decoded);
         if (received == 0) {
             impl_->deliver(frame);
             return CaptureResult::FrameReady;
         }
+        // 当前无法输出一张帧，需要通过 avcodec_send_packet() 提供更多输入
         if (received != AVERROR(EAGAIN)) {
             return impl_->fail("receive camera frame: " + error_text(received));
         }
@@ -294,6 +305,7 @@ CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds 
             av_packet_unref(impl_->packet);
             return CaptureResult::Stopped;
         }
+        // 摄像头输入当前没有包可读取	短暂等待，再尝试
         if (result == AVERROR(EAGAIN)) {
             if (Clock::now() >= deadline) { return CaptureResult::Timeout; }
             std::unique_lock<std::mutex> lock(impl_->wait_mutex);

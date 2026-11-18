@@ -49,6 +49,7 @@ public:
 
     // 可选外部停止标记须存活到 close；用于工作线程打开设备时保留并发停止请求。
     void open(const CameraConfig& config, const std::atomic<bool>* stop_requested = nullptr);
+    // 每次循环先尝试拿到解码结果；拿不到、且解码器明确要求更多输入时，才去摄像头读取一个数据包并送入解码器。
     CaptureResult read(CameraFrame& frame, std::chrono::milliseconds timeout);
     void request_stop();
     void close();
