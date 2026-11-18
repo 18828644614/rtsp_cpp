@@ -23,8 +23,13 @@ struct ServerOptions {
     int gop = 30;
     std::string pixel_format = "yuyv422";
     bool list_cameras = false;
+    int microphone_index = -1;
+    std::string microphone_device;
+    bool list_microphones = false;
+    bool synthetic_audio = false;
     bool help = false;
     bool camera() const { return camera_index >= 0 || !device_name.empty(); }
+    bool audio() const { return microphone_index >= 0 || !microphone_device.empty() || synthetic_audio; }
 };
 
 inline int server_number(const std::string& value, int minimum, int maximum,
@@ -67,10 +72,12 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
         const auto& option = args[index];
         if (!seen.insert(option).second) { throw std::invalid_argument("duplicate option: " + option); }
         if (option == "--list-cameras") { options.list_cameras = true; continue; }
+        if (option == "--list-microphones") { options.list_microphones = true; continue; }
+        if (option == "--synthetic-audio") { options.synthetic_audio = true; continue; }
         if (option != "--camera" && option != "--device" && option != "--port" &&
             option != "--bind" && option != "--width" && option != "--height" &&
             option != "--fps" && option != "--bitrate" && option != "--gop" &&
-            option != "--pixel-format") {
+            option != "--pixel-format" && option != "--microphone" && option != "--microphone-device") {
             throw std::invalid_argument("unknown option: " + option);
         }
         if (++index == args.size()) { throw std::invalid_argument("missing value for " + option); }
@@ -89,9 +96,30 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
             options.bitrate = server_number(value, 1, std::numeric_limits<int>::max(), option);
         } else if (option == "--gop") { options.gop = server_number(value, 1, 10000, option); }
         else if (option == "--pixel-format") { options.pixel_format = value; }
+        else if (option == "--microphone") { options.microphone_index = server_number(value, 0, 10000, option); }
+        else if (option == "--microphone-device") { options.microphone_device = value; }
     }
     if (options.list_cameras) {
         if (seen.size() != 1) { throw std::invalid_argument("--list-cameras must be used alone"); }
+        return options;
+    }
+    if (options.list_microphones) {
+        if (seen.size() != 1) { throw std::invalid_argument("--list-microphones must be used alone"); }
+        return options;
+    }
+    if (options.audio()) {
+        const int selections = (options.microphone_index >= 0 ? 1 : 0) +
+            (!options.microphone_device.empty() ? 1 : 0) + (options.synthetic_audio ? 1 : 0);
+        if (selections != 1 || options.camera()) {
+            throw std::invalid_argument("select one audio input; combined camera/microphone mode is not available yet");
+        }
+        for (const auto& option : seen) {
+            if (option != "--microphone" && option != "--microphone-device" &&
+                option != "--synthetic-audio" && option != "--port" && option != "--bind") {
+                throw std::invalid_argument("unsupported audio-mode option: " + option);
+            }
+        }
+        options.video_path.clear();
         return options;
     }
     if (!options.camera() || (options.camera_index >= 0 && !options.device_name.empty())) {

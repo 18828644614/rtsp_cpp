@@ -1,5 +1,13 @@
 #include "app/server_options.h"
 #include "rtsp/rtsp_server.h"
+#ifdef RTSP_HAS_AUDIO_SOURCE
+#include "app/synthetic_audio_input.h"
+#include "media/microphone_audio_source.h"
+#include "media/video_source.h"
+#endif
+#ifdef RTSP_HAS_MICROPHONE_CAPTURE
+#include "media/microphone_capture_input.h"
+#endif
 #ifdef RTSP_HAS_CAMERA_CAPTURE
 #include "media/camera_capture.h"
 #endif
@@ -39,6 +47,9 @@ void print_usage() {
               << "  --fps N --bitrate N --gop N  Defaults 30, 2000000 bits/s, one-second GOP\n"
               << "  --pixel-format NAME         yuyv422 (default) or bgr24\n"
               << "Camera streaming requires ENABLE_CAMERA_CAPTURE=ON and ENABLE_H264_ENCODING=ON.\n"
+              << "Audio: --microphone INDEX | --microphone-device NAME | --synthetic-audio\n"
+              << "  --list-microphones          Enumerate microphones (requires capture and AAC options)\n"
+              << "  Audio streaming requires ENABLE_AAC_ENCODING=ON; microphone also needs ENABLE_MICROPHONE_CAPTURE=ON.\n"
               << "Playback: ffplay -rtsp_transport tcp rtsp://SERVER_IP:8554/live\n";
 }
 
@@ -76,6 +87,49 @@ int wmain(int argc, wchar_t* argv[]) {
             return 0;
         }
         ConsoleScope console;
+        if (options.list_microphones) {
+#ifdef RTSP_HAS_MICROPHONE_CAPTURE
+            const auto devices = rtsp::MicrophoneCapture::enumerate_devices();
+            for (std::size_t index = 0; index < devices.size(); ++index) {
+                std::cout << index << ": " << devices[index].name << '\n';
+            }
+            return 0;
+#else
+            throw std::invalid_argument("microphone enumeration requires ENABLE_MICROPHONE_CAPTURE=ON and ENABLE_AAC_ENCODING=ON");
+#endif
+        }
+        if (options.audio()) {
+#ifdef RTSP_HAS_AUDIO_SOURCE
+            std::unique_ptr<rtsp::AudioFrameInput> input;
+            if (options.synthetic_audio) {
+                input = std::make_unique<rtsp::app::SyntheticAudioInput>(0, 44100, 2, true);
+            } else {
+#ifdef RTSP_HAS_MICROPHONE_CAPTURE
+                if (options.microphone_index >= 0) {
+                    const auto devices = rtsp::MicrophoneCapture::enumerate_devices();
+                    if (static_cast<std::size_t>(options.microphone_index) >= devices.size()) {
+                        throw std::invalid_argument("microphone index out of range; use --list-microphones");
+                    }
+                    options.microphone_device = devices[static_cast<std::size_t>(options.microphone_index)].name;
+                }
+                rtsp::MicrophoneConfig capture;
+                capture.device_name = options.microphone_device;
+                input = rtsp::make_microphone_capture_input(capture);
+#else
+                throw std::invalid_argument("microphone streaming requires ENABLE_MICROPHONE_CAPTURE=ON");
+#endif
+            }
+            auto source = std::make_unique<rtsp::MicrophoneAudioSource>(
+                std::move(input), rtsp::MicrophoneAudioSourceConfig{}, &console_stop);
+            std::cout << "Audio: AAC-LC 48000 Hz mono, " << source->track().fmtp << std::endl;
+            auto audio_server = std::make_unique<rtsp::RtspServer>(options.address, options.port,
+                nullptr, std::move(source));
+            if (!console_stop.load()) { audio_server->run(&console_stop); }
+            return 0;
+#else
+            throw std::invalid_argument("audio streaming requires ENABLE_AAC_ENCODING=ON");
+#endif
+        }
 #ifndef RTSP_HAS_CAMERA_SOURCE
         if (options.camera()) {
             throw std::invalid_argument(

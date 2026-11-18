@@ -503,7 +503,7 @@ void test_wire_reports_and_eof() {
     const auto response = peer.exchange("PLAY", "", peer.session);
     check(response.header("RTP-Info") == "url=rtsp://127.0.0.1/live/trackID=0;seq=100,"
           "url=rtsp://127.0.0.1/live/trackID=1;seq=100", "multi-track RTP-Info mismatch");
-    std::map<unsigned int, std::uint32_t> packets, octets, sources;
+    std::map<unsigned int, std::uint32_t> packets, octets, sources, origins;
     std::map<unsigned int, int> reports, byes;
     std::map<unsigned int, long double> mapping;
     const auto deadline = Clock::now() + std::chrono::seconds(3);
@@ -514,6 +514,7 @@ void test_wire_reports_and_eof() {
             check(item.is_interleaved, "unexpected control response during stream");
             if (item.channel == 6 || item.channel == 10) {
                 const auto rtp = rtsp::parse_rtp_packet(item.payload);
+                if (packets[item.channel] == 0) { origins[item.channel] = rtp.timestamp; }
                 ++packets[item.channel];
                 octets[item.channel] += static_cast<std::uint32_t>(rtp.payload.size());
                 sources[item.channel] = rtp.ssrc;
@@ -528,7 +529,7 @@ void test_wire_reports_and_eof() {
                 ++reports[channel];
                 const int rate = channel == 6 ? 90000 : 48000;
                 mapping[channel] = static_cast<long double>(sr.ntp) / 4294967296.0L
-                                   - static_cast<long double>(sr.rtp_timestamp) / rate;
+                                   - static_cast<long double>(sr.rtp_timestamp - origins[channel]) / rate;
                 if (compound.size() == 3) {
                     check(compound[2].type == 203 && compound[2].bye_sources[0] == sr.ssrc,
                           "BYE has wrong SSRC");

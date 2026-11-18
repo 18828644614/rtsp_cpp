@@ -273,7 +273,7 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
     bool multiple_slices = false;
     for (int index = 0; index < frames; ++index) {
         const auto& unit = units[static_cast<std::size_t>(index)];
-        check(unit.pts == static_cast<std::uint64_t>(av_rescale_q(index, {fps_den, fps_num}, {1, 90000})),
+        check(unit.pts == av_rescale_q(index, {fps_den, fps_num}, {1, 90000}),
             "AU PTS used a fixed 25 fps clock or accumulated rounding error");
         check(unit.duration == static_cast<std::uint32_t>(av_rescale_q(1, {fps_den, fps_num}, {1, 90000})),
             "AU duration does not match source duration");
@@ -349,7 +349,7 @@ void timing_tests() {
     for (int index = 0; index < 10; ++index) {
         const auto begin = av_rescale_q(index, {1001, 24000}, {1, 90000});
         const auto end = av_rescale_q(index + 1, {1001, 24000}, {1, 90000});
-        check(units[index].pts == static_cast<std::uint64_t>(begin) && units[index].duration == end - begin,
+        check(units[index].pts == begin && units[index].duration == end - begin,
             "nominal fractional frame rate accumulated timestamp error");
     }
     encoder.open(config);

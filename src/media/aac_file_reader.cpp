@@ -90,7 +90,7 @@ void AacFileReader::open(const std::string& path) {
         }
         AacAccessUnit frame;
         frame.data = data.substr(offset + header_size, frame_size - header_size);
-        frame.pts = static_cast<std::uint64_t>(frames.size()) * 1024;
+        frame.pts = static_cast<std::int64_t>(frames.size()) * 1024;
         frames.push_back(frame);
         offset += frame_size;
     }

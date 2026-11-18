@@ -36,6 +36,7 @@ add_library(rtsp_core STATIC
     src/media/file_video_source.cpp
     src/media/file_audio_source.cpp
     src/media/video_frame_queue.cpp
+    src/media/audio_frame_queue.cpp
     src/media/media_session.cpp
     src/media/h264_file_writer.cpp
 )
@@ -66,6 +67,10 @@ option(ENABLE_H264_ENCODING "Build the FFmpeg/libx264 encoder, live video source
 if(ENABLE_H264_ENCODING)
     include(cmake/H264Encoding.cmake)
 endif()
+option(ENABLE_AAC_ENCODING "Build AAC encoding, resampling and live audio source" OFF)
+if(ENABLE_AAC_ENCODING)
+    include(cmake/AacEncoding.cmake)
+endif()
 if(ENABLE_CAMERA_CAPTURE)
     target_link_libraries(rtsp_server PRIVATE camera_capture)
     target_compile_definitions(rtsp_server PRIVATE RTSP_HAS_CAMERA_CAPTURE)
@@ -77,6 +82,11 @@ if(ENABLE_CAMERA_CAPTURE)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(audio_frame_queue_tests tests/audio_frame_queue_tests.cpp)
+    target_link_libraries(audio_frame_queue_tests PRIVATE rtsp_core)
+    add_test(NAME audio_frame_queue_tests COMMAND audio_frame_queue_tests)
+    set_tests_properties(audio_frame_queue_tests PROPERTIES TIMEOUT 10)
+
     add_executable(server_options_tests tests/server_options_tests.cpp)
     target_link_libraries(server_options_tests PRIVATE rtsp_core)
     add_test(NAME server_options_tests COMMAND server_options_tests)

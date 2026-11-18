@@ -132,7 +132,7 @@ void test_file_video_source_contract() {
         const auto& expected_pps = index < 2 ? pps : updated_pps;
         check(frame.nalus == std::vector<std::string>({aud, expected_sps, expected_pps, idr}),
               "IDR parameters did not follow playback order");
-        check(frame.is_keyframe && frame.pts == static_cast<std::uint64_t>(index) * 3600
+        check(frame.is_keyframe && frame.pts == static_cast<std::int64_t>(index) * 3600
                   && frame.duration == 3600, "file video timing changed");
     }
     check(source->ended(), "last file AU did not mark source ended");

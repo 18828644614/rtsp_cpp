@@ -163,7 +163,9 @@ void RtspServerConnection::handle_item(const RtspStreamItem& item) {
         const auto& tracks = next_session.tracks();
         for (std::size_t i = 0; i < tracks.size(); ++i) {
             if (tracks[i].setup) {
-                candidate->add_track(i, description.tracks[i], tracks[i].transport, 100, make_ssrc());
+                const auto ssrc = make_ssrc();
+                const auto origin = description.tracks[i].media_type == "audio" ? ssrc : 0;
+                candidate->add_track(i, description.tracks[i], tracks[i].transport, 100, ssrc, origin);
             }
         }
         const auto base = request.uri.substr(0, request.uri.find('/', 7)) + "/live/";

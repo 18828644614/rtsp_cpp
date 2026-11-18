@@ -27,6 +27,12 @@ RtspServer::~RtspServer() {
     close_connections();
 }
 
+RtspServer::RtspServer(std::string address, std::uint16_t port,
+                       std::unique_ptr<VideoSource> video_source,
+                       std::unique_ptr<AudioSource> audio_source, RuntimeOptions options)
+    : address_(std::move(address)), port_(port), options_(options),
+      media_session_(std::make_shared<MediaSession>(std::move(video_source), std::move(audio_source))) {}
+
 void RtspServer::run(const std::atomic<bool>* stop_requested) {
     // 把 running_ 设置为 true
     // 返回设置之前的值

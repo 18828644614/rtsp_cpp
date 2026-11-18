@@ -392,3 +392,26 @@ rg: build*/CMakeCache.txt: IO error for operation on build*/CMakeCache.txt
 
 - Related Files: cmake/MicrophoneCapture.cmake
 - Reproducible: yes
+
+## [ERR-20261118-AAC] audio-encoding-validation
+
+**Logged**: 2026-11-18
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+阶段 3 验证暴露零 RTP 起点、旧测试对起点的假设，以及 Windows 工具调用问题。
+
+### Error
+- apply_patch.bat 通过管道或多行参数无法转发补丁；直接调用其 codex.exe --codex-run-as-apply-patch 入口完成编辑。
+- FFmpeg 首次 RTCP 后输出包时间比预期少几个 tick；源码确认 base_timestamp=0 被当作未初始化。
+- 修改网络音频起点后，旧多轨测试的 SSRC 连续值和零起点假设失效。
+- 一次并行构建在 FFmpeg DLL 复制阶段失败，串行重建通过。
+
+### Resolution
+音频网络轨道使用自己的非零 SSRC 值作为 RTP 起点，保持 SSRC 分配顺序；测试先去除各轨原点再比较时间。外部 RTSP 的 48 包 PTS 增量全部为 1024；默认 17/17、音频 31/31、全功能 40/40 测试通过。
+
+### Metadata
+- Related Files: src/media/media_session.cpp, src/rtsp/rtsp_server_connection.cpp, tests/verify_audio_encoding.py
+- Reproducible: yes (zero RTP origin); intermittent (DLL copy)

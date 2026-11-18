@@ -9,7 +9,7 @@ namespace {
 void check(bool ok, const char* message) {
     if (!ok) { throw std::runtime_error(message); }
 }
-rtsp::H264AccessUnit frame(std::uint64_t pts, bool key = false, std::size_t bytes = 4) {
+rtsp::H264AccessUnit frame(std::int64_t pts, bool key = false, std::size_t bytes = 4) {
     return {{std::string(bytes, key ? '\x65' : '\x41')}, key, pts, 3000};
 }
 void test_limits_and_recovery() {
@@ -67,7 +67,7 @@ void test_concurrent_queue() {
     });
     bool valid = true;
     bool first = true;
-    std::uint64_t previous = 0;
+    std::int64_t previous = 0;
     for (;;) {
         rtsp::H264AccessUnit out;
         const auto result = queue.read(out);

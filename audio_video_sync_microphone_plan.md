@@ -1,6 +1,6 @@
 # 音视频同步与实时麦克风采集实现方案
 
-> 日期：2026-11-18。本文是基于当前仓库的设计与实施计划，文中新增类、选项和命令尚未实现。
+> 日期：2026-11-18。本文保留整体设计与实施路线；阶段 1～3 已实现，最小有符号 PTS 改造提前在阶段 3 完成，阶段 4～6 仍为计划。阶段 3 的实际接口、命令和验证结果见 [独立音频编码实现说明](audio_encoding_implementation.md)。
 > 目标环境：Windows；输入为摄像头与电脑麦克风；输出为 H.264 + AAC-LC 的 RTSP/TCP 双轨道。
 
 ## 1. 目标与范围
@@ -32,9 +32,9 @@
 
 重要事实：
 
-1. 当前 `MediaSession` 直接持有 `unique_ptr<AacFileReader>`，不能直接接入实时麦克风源。
+1. 阶段 1 已将 `MediaSession` 改为持有 `unique_ptr<AudioSource>`，文件读取由 `FileAudioSource` 包装；阶段 3 已接入 `MicrophoneAudioSource`。
 2. `CameraCapture` 的 `relative_pts_us` 按本设备首帧归零，`H264Encoder` 也会按自己的 `source_origin` 归零；共同时间线模式必须避免丢失设备启动偏移。
-3. 当前媒体 AU 和通用负载使用无符号 PTS；AAC 编码器起始填充可能带来负 PTS，扩展时需要调整内部时间表示。
+3. 阶段 3 已将媒体 AU、通用负载和订阅起点改为有符号 PTS，保留 AAC 起始填充产生的负时间；RTP 仍使用 uint32_t。
 4. 已有基本 RTCP SR，无需重新实现 RTCP 协议；需要修改并验证时间锚点的语义。
 5. 自带客户端目前主要接收并保存 H.264，不具备完整音视频播放验收能力。
 
@@ -282,22 +282,23 @@ drift_us = audio_end_us - reference_end_us
 
 ## 10. 构建、命令行与生命周期
 
-建议增加 `ENABLE_MICROPHONE_CAPTURE` 和 `ENABLE_AAC_ENCODING` 两个可选构建开关，沿用已有 FFmpeg 查找与 DLL 复制逻辑。采集依赖 `avdevice/avformat/avcodec/avutil`，编码与格式转换依赖 `avcodec/avutil/swresample`；启用相关功能时才引入依赖，默认核心协议构建仍不要求 FFmpeg。
+已增加 `ENABLE_MICROPHONE_CAPTURE` 和 `ENABLE_AAC_ENCODING` 两个可选构建开关，沿用已有 FFmpeg 查找与 DLL 复制逻辑。采集依赖 `avdevice/avformat/avcodec/avutil`，编码与格式转换依赖 `avcodec/avutil/swresample`；启用相关功能时才引入依赖，默认核心协议构建仍不要求 FFmpeg。
 
 启动时检查 AAC 编码器、采样格式、frame_size 和音频设备。音频源的 track 配置必须在生成 SDP 前就绪，配置发布后保持不变。任一源启动失败或用户取消时，回收已启动的另一个源，不遗留线程和设备句柄。
 
 建议新增选项：
 
-| 选项（待实现） | 含义 |
+| 选项 | 含义 |
 | --- | --- |
-| `--list-microphones` | 只枚举麦克风，不采集 |
-| `--microphone INDEX` | 选择一个音频输入设备 |
-| `--audio-device NAME` | 按名称选择麦克风，与 INDEX 互斥 |
-| `--audio-bitrate N` | AAC 比特率，建议初始 64000 |
-| `--send-buffer-ms N` | 两轨共同发送缓冲预算 |
-| `--audio-offset-ms N` | 经校准的音频时间偏移；正值表示相同音频采样在媒体时间线上向后移动 |
+| `--list-microphones` | 已实现：只枚举麦克风，不采集 |
+| `--microphone INDEX` | 已实现：启动纯音频麦克风服务器 |
+| `--microphone-device NAME` | 已实现：按名称选择麦克风，与 INDEX 互斥 |
+| `--synthetic-audio` | 已实现：无需设备的纯音频服务器 |
+| `--audio-bitrate N` | 待实现；当前 AAC 默认 64000 bit/s |
+| `--send-buffer-ms N` | 待实现：两轨共同发送缓冲预算 |
+| `--audio-offset-ms N` | 待实现：经校准的音频时间偏移；正值表示相同音频采样在媒体时间线上向后移动 |
 
-第一版编码采样率和声道固定为 48000/1，减少无效参数组合。服务器提供“摄像头 + 麦克风”模式，probe 先验证纯音频；是否开放纯音频服务器模式在阶段 3 中统一处理。以下是目标命令，当前不可直接运行：
+第一版编码采样率和声道固定为 48000/1。阶段 3 已提供纯音频服务器和独立 aac_encode_probe；“摄像头 + 麦克风”组合模式仍待实现。以下示例中的双轨启动命令尚不可运行：
 
 ```powershell
 cmake -S . -B build-av -DENABLE_CAMERA_CAPTURE=ON -DENABLE_H264_ENCODING=ON -DENABLE_MICROPHONE_CAPTURE=ON -DENABLE_AAC_ENCODING=ON -DFFMPEG_ROOT="C:/path/to/ffmpeg-sdk"
@@ -312,8 +313,8 @@ cmake --build build-av --config Debug
 | --- | --- | --- |
 | 1：抽象音频源 | 新增 AudioSource/FileAudioSource；保留构造兼容 | 现有文件双轨、纯音频和摄像头测试通过 |
 | 2：独立采集 | 新增麦克风枚举、PCM 采集、probe 和可停止读取 | 有设备时连续采集正常；无设备时明确报错；停止能释放设备 |
-| 3：独立音频编码 | 重采样、FIFO、AAC、配置生成、音频源；打通纯音频测试会话 | 外部解码器可解码，采样数与 PTS 连续，padding 处理有证据 |
-| 4：共同时间线 | 注入 CaptureTimeline；改造视频模式和有符号 PTS；区分实时/文件调度 | 人工制造 120 ms 启动差，RTP/RTCP 仍保留该差值 |
+| 3：独立音频编码（已实现） | 重采样、FIFO、AAC、配置生成、音频源、最小有符号 PTS；纯音频测试会话 | 已用外部 FFmpeg 验证解码、连续采样/PTS、padding 和脉冲位置；真实设备验收边界见实现说明 |
+| 4：共同时间线 | 注入 CaptureTimeline；改造视频模式；复查有符号时间与实时/文件调度 | 人工制造 120 ms 启动差，RTP/RTCP 仍保留该差值 |
 | 5：实时行为 | 接通双轨服务器入口；处理晚加入、积压、无人观看和设备失败 | 多客户端互不拖累，恢复不补发过期历史数据 |
 | 6：漂移与验收 | 统计、时钟映射验证、受限重采样补偿和长时间测试 | 模拟漂移可被控制，真实设备测试无持续偏差增长趋势 |
 

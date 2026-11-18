@@ -70,3 +70,24 @@ RTSP 会话层已经正确接受零起点 Range，但连接层把任意非空 Ra
 - **Resolved**: 2026-10-26T20:45:00+08:00
 - **Commit/PR**: working tree
 - **Notes**: 连接层已将合法零起点 Range 视为共享进度加入；新增 TCP 晚加入回归测试，全部 11 个 CTest 通过。
+
+## [LRN-20261118-AAC] best_practice
+
+**Logged**: 2026-11-18
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+AAC 编码和 RTP 互通必须分别保留包时间、核对 padding，并允许每轨独立的非零 RTP 原点。
+
+### Details
+本机 AAC initial_padding 为 1024，首包 PTS 为 -1024。44117 个 44.1 kHz 输入采样转换为 48019 个有效采样，补 109 后提交 48128，外部解码产生 49152=1024+48019+109。脉冲从 0.25 秒映射到解码位置 13024。FFmpeg 把 base_timestamp=0 用作未初始化标记，首次 SR 可能使零起点产生小幅偏移；网络音频采用非零起点后外部 PTS 连续。
+
+### Suggested Action
+音频 AU 使用有符号 PTS，输出直接保留编码包 PTS/duration；FIFO 和重采样器分别排空，记录手动补零和编码器填充。比较媒体时间或验证 SR 时，先去掉每轨 RTP 原点。保留外部解码、脉冲及 RTP 回绕测试。
+
+### Metadata
+- Source: error
+- Related Files: src/media/aac_encoder.cpp, src/media/media_time.h, tests/aac_encoder_tests.cpp, tests/verify_audio_encoding.py
+- Tags: aac, padding, pts, rtcp, ffmpeg

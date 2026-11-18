@@ -228,7 +228,7 @@ struct H264Encoder::Impl {
                     throw std::runtime_error("encoder packet timestamp does not match a submitted frame");
                 }
                 auto unit = parse_packet(*packet);
-                unit.pts = static_cast<std::uint64_t>(found->first);
+                unit.pts = found->first;
                 unit.duration = found->second;
                 parameter_sets(unit);
                 output.push_back(std::move(unit));

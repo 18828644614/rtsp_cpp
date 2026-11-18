@@ -16,6 +16,7 @@ namespace rtsp {
 class RtspServerConnection;
 class MediaSession;
 class VideoSource;
+class AudioSource;
 
 class RtspServer {
 public:
@@ -24,6 +25,8 @@ public:
     // 服务器接管一个视频源；所有连接共享同一个 MediaSession。
     RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
                RuntimeOptions options = {});
+    RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
+               std::unique_ptr<AudioSource> audio_source, RuntimeOptions options = {});
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;

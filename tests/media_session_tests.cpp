@@ -455,7 +455,7 @@ public:
     bool ready = false;
     bool eof = false;
     bool fail = false;
-    std::uint64_t pts = 0;
+    std::int64_t pts = 0;
     int reads = 0;
     int resumes = 0;
     int stops = 0;

@@ -1,4 +1,5 @@
 #include "media/media_session.h"
+#include "media/media_time.h"
 #include "media/file_video_source.h"
 #include "media/file_audio_source.h"
 #include "rtsp/rtsp_stream_parser.h"
@@ -19,7 +20,7 @@ MediaSubscription::MediaSubscription(std::shared_ptr<net::OutboundQueue> queue)
 
 void MediaSubscription::add_track(std::size_t index, const MediaTrack& track,
                                    TcpTransport transport, std::uint16_t sequence,
-                                   std::uint32_t ssrc) {
+                                   std::uint32_t ssrc, std::uint32_t timestamp_origin) {
     if (active_ || started_) {
         throw std::logic_error("add tracks before PLAY");
     }
@@ -33,6 +34,7 @@ void MediaSubscription::add_track(std::size_t index, const MediaTrack& track,
     state.transport = transport;
     state.control = track.control;
     state.clock_rate = track.clock_rate;
+    state.timestamp_origin = timestamp_origin;
     state.sender = std::make_unique<RtpSender>(transport.rtp_channel,
                                              track.payload_type, sequence, ssrc);
     tracks_.push_back(std::move(state));
@@ -195,11 +197,12 @@ void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& u
             start_clock_rate_ = unit.clock_rate;
             started_ = true;
         }
-        if (unit.pts * start_clock_rate_ < start_pts_ * unit.clock_rate) {
+        if (media_pts_less(unit.pts, unit.clock_rate, start_pts_, start_clock_rate_)) {
             return;
         }
-        const std::uint64_t base = start_pts_ * unit.clock_rate / start_clock_rate_;
-        const auto timestamp = static_cast<std::uint32_t>(unit.pts - base);
+        const auto base = rescale_media_pts(start_pts_, start_clock_rate_, unit.clock_rate);
+        const auto timestamp = track.timestamp_origin + static_cast<std::uint32_t>(unit.pts)
+                               - static_cast<std::uint32_t>(base);
         try {
             if (track.sender->send_payloads(unit, timestamp, *queue_)) {
                 if (!track.queued_rtp) {
@@ -395,12 +398,13 @@ void MediaSession::tick(Clock::time_point now) {
                 return;
             }
             bool send_video = false;
-            if (video_ && (!audio_ || video_->pts * audio_->clock_rate <= audio_->pts * video_->clock_rate)) {
+            if (video_ && (!audio_ || !media_pts_less(audio_->pts, audio_->clock_rate,
+                                                     video_->pts, video_->clock_rate))) {
                 send_video = true;
             }
             const RtpPayloadUnit& unit = *(send_video ? video_ : audio_);
             const std::size_t track_index = send_video ? video_track_ : audio_track_;
-            const auto media_time = std::chrono::microseconds(unit.pts * 1000000 / unit.clock_rate);
+            const auto media_time = std::chrono::microseconds(rescale_media_pts(unit.pts, unit.clock_rate, 1000000));
             // clock_origin 表示：媒体时间0对应的时刻
             if (reset_clock_) {
                 clock_origin_ = now - media_time;

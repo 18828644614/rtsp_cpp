@@ -137,7 +137,7 @@ bool H264FileReader::read(H264AccessUnit& frame) {
         return false;
     }
     frame = frames_[next_frame_];
-    frame.pts = static_cast<std::uint64_t>(next_frame_) * 3600;
+    frame.pts = static_cast<std::int64_t>(next_frame_) * 3600;
     frame.duration = 3600;
     ++next_frame_;
     return true;

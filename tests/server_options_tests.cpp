@@ -44,6 +44,12 @@ int main() {
         check(options.video_path == "中文路径.h264");
         check(rtsp::app::parse_server_options({"--help"}).help);
         check(rtsp::app::parse_server_options({"--list-cameras"}).list_cameras);
+        check(rtsp::app::parse_server_options({"--list-microphones"}).list_microphones);
+        options = rtsp::app::parse_server_options({"--microphone", "0", "--port", "9000"});
+        check(options.audio() && !options.camera() && options.microphone_index == 0 &&
+              options.video_path.empty() && options.port == 9000);
+        check(rtsp::app::parse_server_options({"--microphone-device", "USB 麦克风"}).microphone_device == "USB 麦克风");
+        check(rtsp::app::parse_server_options({"--synthetic-audio"}).synthetic_audio);
         options = rtsp::app::parse_server_options({"--camera", "0", "--fps", "60", "--bind", "0.0.0.0"});
         check(options.camera() && options.camera_index == 0 && options.gop == 60 && options.video_path.empty());
         options = rtsp::app::parse_server_options({"--device", "USB 摄像头", "--width", "640", "--height", "480",
@@ -60,6 +66,10 @@ int main() {
             {"--camera", "0", "--port", "0"}, {"--camera", "0", "--port", "999999999999999999"},
             {"--camera", "0", "--camera", "1"}, {"--camera", "0", "sample.h264"},
             {"8554", "127.0.0.1", "--camera", "0"}, {"--list-cameras", "--camera", "0"},
+            {"--microphone", "-1"}, {"--microphone"}, {"--microphone-device", ""},
+            {"--microphone", "0", "--camera", "0"}, {"--microphone", "0", "--microphone-device", "x"},
+            {"--synthetic-audio", "--microphone", "0"}, {"--synthetic-audio", "--fps", "30"},
+            {"--list-microphones", "--port", "9000"},
             {"--not-an-option"}, {"1", "2", "3", "4", "5"}}) { rejects(args); }
         unicode_file_paths();
         std::cout << "PASS: file compatibility, camera selection, Unicode and invalid options\n";

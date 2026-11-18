@@ -110,7 +110,7 @@ std::vector<Packet> collect(Peer& peer) {
 
 // 同时检查两轨的通道、序号、SSRC、媒体顺序、AU Header 和共同时间起点。
 void check_packets(const std::vector<Packet>& packets, int video_count, int audio_count,
-                   int channel, std::uint32_t ssrc, int start_video = 0) {
+                   int channel, std::uint32_t ssrc, int start_video = 0, std::uint32_t audio_origin = 0) {
     int videos = 0;
     int audios = 0;
     std::uint16_t video_sequence = 100;
@@ -136,7 +136,7 @@ void check_packets(const std::vector<Packet>& packets, int video_count, int audi
             check(rtp.marker && rtp.payload.size() == 7
                       && rtp.payload.substr(0, 4) == std::string("\0\x10\0\x18", 4), "wrong AAC AU header");
             const unsigned int index = static_cast<unsigned char>(rtp.payload[4]);
-            check(rtp.timestamp == index * 1024 - static_cast<unsigned int>(start_video * 1920),
+            check(rtp.timestamp - audio_origin == index * 1024 - static_cast<unsigned int>(start_video * 1920),
                   "audio lost common video time origin");
             media_time = static_cast<std::uint64_t>(index) * 1024 * 1000000 / 48000;
             if (video_count != 0) {
@@ -344,7 +344,10 @@ void test_tcp_two_setup_and_media() {
     parser.finish();
     test::wait_finished(connection);
     check(connection.finished() && !packets.empty(), "connection did not release after EOF");
-    check_packets(packets, 8, 20, 6, packets[0].rtp.ssrc);
+    const auto first_audio = std::find_if(packets.begin(), packets.end(),
+        [](const Packet& packet) { return packet.rtp.payload_type == 97; });
+    check(first_audio != packets.end() && first_audio->rtp.timestamp != 0, "network audio needs a nonzero RTP origin");
+    check_packets(packets, 8, 20, 6, packets[0].rtp.ssrc, 0, first_audio->rtp.timestamp);
 }
 
 // FFmpeg/ffplay 通过 Range: npt=0.000- 请求 PLAY；晚加入者仍应加入共享进度。

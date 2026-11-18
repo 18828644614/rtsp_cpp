@@ -29,7 +29,7 @@ public:
 
     // 仅在订阅前调用，为已经 SETUP 的轨道建立 Sender。
     void add_track(std::size_t index, const MediaTrack& track, TcpTransport transport,
-                   std::uint16_t sequence, std::uint32_t ssrc);
+                   std::uint16_t sequence, std::uint32_t ssrc, std::uint32_t timestamp_origin = 0);
     void cancel();
     // 正常结束：停止生产并排入最终 SR/SDES/BYE，队列关闭仍由调用者决定。
     void end();
@@ -52,6 +52,7 @@ private:
         TcpTransport transport;
         std::string control;
         int clock_rate = 90000;
+        std::uint32_t timestamp_origin = 0;
         bool queued_rtp = false;
         bool final_queued = false;
         bool report_pending = false;
@@ -75,7 +76,7 @@ private:
     bool started_ = false;
     bool failed_ = false;
     // 所有轨道使用同一个媒体起点，各自换算为本轨道的 RTP tick。
-    std::uint64_t start_pts_ = 0;
+    std::int64_t start_pts_ = 0;
     int start_clock_rate_ = 1;
 };
 
