@@ -12,6 +12,8 @@ USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 
 
 音视频同步方案的阶段 1 已抽出 `AudioSource` 接口，AAC 文件通过 `FileAudioSource` 复用现有读取器。`MediaSession` 保留文件路径和“视频源 + 音频路径”构造方式，同时支持接管 `unique_ptr<VideoSource>` 与 `unique_ptr<AudioSource>`；音频暂时无帧时按 5 ms 重试，恢复订阅和停止时调用源的生命周期接口。后续采集与同步路线见 [音视频同步与实时麦克风采集实现方案](audio_video_sync_microphone_plan.md)。
 
+麦克风阶段 2 已增加可选的 `MicrophoneCapture`、PCM 帧和独立 `microphone_probe`，支持设备枚举、实际采样格式和原始时间信息、可停止读取与重复释放。`ENABLE_MICROPHONE_CAPTURE=ON` 可独立构建；本机已验证 Realtek 麦克风连续 60 秒采集及跨线程停止重开。构建、参数、线程约定和验收记录见 [麦克风独立采集阶段 2 实现说明](microphone_capture_implementation.md)。
+
 摄像头阶段 2 已增加可选的 `CameraCapture` 和独立 `camera_probe`，支持设备枚举、原始帧采集、时间戳日志、连续采集和停止释放。已验证 `Integrated Camera` 的 1280x720、30 fps、`yuyv422` 模式；物理拔出仍待外接 USB 摄像头验收。构建、运行命令和模块阅读顺序见 [摄像头采集阶段 2 实现说明](camera_capture_implementation.md)。
 
 摄像头阶段 3 已增加可选 `H264Encoder` 和独立 `h264_encode_probe`：将 YUYV422/BGR24 原始帧转成 YUV420P，再用 libx264 输出带 SPS/PPS、IDR 和 90 kHz 时间的完整 H.264 访问单元。`ENABLE_H264_ENCODING=ON` 可以独立构建，用生成帧完成无摄像头的编码/解码验证；同时开启采集选项可接真实设备。构建、时间规则和验收见 [H.264 编码阶段 3 实现说明](h264_encoder_implementation.md)。

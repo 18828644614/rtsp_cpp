@@ -367,3 +367,28 @@ rg: build*/CMakeCache.txt: IO error for operation on build*/CMakeCache.txt
 ### 元数据（Metadata）
 - Reproducible: yes
 - Related Files: tests/camera_rtsp_tests.cpp
+
+
+## [ERR-20261118-MIC] nested-template-interpolation
+
+**Logged**: 2026-11-18
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### 摘要（Summary）
+用 JavaScript 模板生成 CMake 时，CMake 的变量插值被 JavaScript 解释，导致脚本在解析阶段失败。
+
+### 错误（Error）
+~~~text
+[214:41-214:45]: Unexpected token: 'case'
+~~~
+
+### 详情与修复（Details and Resolution）
+脚本未执行，没有产生部分文件修改。改为读取已有 CameraCapture.cmake，并替换模块名称和测试注册文本；生成 probe 与 CMake 分开执行，避免嵌套模板语言插值冲突。
+
+### 建议行动（Suggested Action）
+生成含有插值语法的其他语言时，优先使用已有文件的明确文本替换或独立原文文件，不把目标语言模板直接嵌进 JavaScript 模板。
+
+- Related Files: cmake/MicrophoneCapture.cmake
+- Reproducible: yes
