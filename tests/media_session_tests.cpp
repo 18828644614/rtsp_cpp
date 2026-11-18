@@ -1,5 +1,6 @@
 #include "event_test_driver.h"
 #include "media/file_video_source.h"
+#include "media/file_audio_source.h"
 #include "media/media_session.h"
 #include "rtsp/rtsp_server_connection.h"
 #include "rtsp/rtsp_stream_parser.h"
@@ -15,6 +16,7 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 const std::string input_path = "media_session_test.h264";
+const std::string audio_input_path = "media_session_test.aac";
 
 void check(bool condition, const char* message) {
     if (!condition) {
@@ -51,14 +53,16 @@ void save_sample(int count, int idr_interval) {
 }
 
 struct Peer {
+    explicit Peer(const rtsp::MediaTrack& track) : Peer(1024 * 1024, 0, 100, 1, track) {}
     explicit Peer(std::size_t limit = 1024 * 1024, int channel = 0,
-                  std::uint16_t sequence = 100, std::uint32_t ssrc = 1)
+                  std::uint16_t sequence = 100, std::uint32_t ssrc = 1,
+                  const rtsp::MediaTrack& track = rtsp::MediaTrack())
         : queue(std::make_shared<rtsp::net::OutboundQueue>(limit)) {
         rtsp::TcpTransport tcp;
         tcp.rtp_channel = channel;
         tcp.rtcp_channel = channel + 1;
         subscription = std::make_shared<rtsp::MediaSubscription>(queue);
-        subscription->add_track(0, rtsp::MediaTrack(), tcp, sequence, ssrc);
+        subscription->add_track(0, track, tcp, sequence, ssrc);
     }
     std::shared_ptr<rtsp::net::OutboundQueue> queue;
     std::shared_ptr<rtsp::MediaSubscription> subscription;
@@ -356,6 +360,231 @@ void test_live_wait_with_future_audio() {
     check(media.ended() && !peer.subscription->failed(), "live video EOF failed after audio drained");
 }
 
+void test_injected_audio_file(bool with_video) {
+    save_sample(3, 2);
+    {
+        std::ofstream output(audio_input_path, std::ios::binary);
+        const std::string adts("\xff\xf1\x4c\x80\x01\x5f\xfc\x11\x22\x33", 10);
+        output << adts << adts << adts;
+        check(static_cast<bool>(output), "failed to save injected audio fixture");
+    }
+    auto video = [with_video]() -> std::unique_ptr<rtsp::VideoSource> {
+        return with_video ? std::make_unique<rtsp::FileVideoSource>(input_path) : nullptr;
+    };
+    rtsp::MediaSession paths(with_video ? input_path : "", audio_input_path);
+    rtsp::MediaSession video_and_path(video(), audio_input_path);
+    rtsp::MediaSession sources(video(), std::make_unique<rtsp::FileAudioSource>(audio_input_path));
+    check(rtsp::make_sdp(paths.description()) == rtsp::make_sdp(sources.description())
+              && rtsp::make_sdp(video_and_path.description()) == rtsp::make_sdp(sources.description()),
+          "audio source injection changed SDP or legacy constructors");
+    check(std::remove(audio_input_path.c_str()) == 0, "injected audio file stayed open");
+    const auto& tracks = sources.description().tracks;
+    check(tracks.size() == (with_video ? 2u : 1u) && tracks.back().control == "trackID=1",
+          "audio source injection changed track order or control");
+    Peer a(tracks[0]);
+    Peer b(tracks[0]);
+    Peer c(tracks[0]);
+    for (auto* peer : {&a, &b, &c}) {
+        if (with_video) { peer->subscription->add_track(1, tracks[1], {2, 3}, 200, 2); }
+    }
+    check(paths.subscribe(a.subscription, "PLAY 200") == rtsp::SubscribeResult::Started
+              && video_and_path.subscribe(b.subscription, "PLAY 200") == rtsp::SubscribeResult::Started
+              && sources.subscribe(c.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "injected audio subscription failed");
+    const auto now = Clock::now();
+    for (int elapsed = 0; elapsed <= 100; elapsed += 5) {
+        const auto time = now + std::chrono::milliseconds(elapsed);
+        paths.tick(time);
+        video_and_path.tick(time);
+        sources.tick(time);
+    }
+    check(paths.ended() && video_and_path.ended() && sources.ended()
+              && !a.subscription->failed() && !b.subscription->failed() && !c.subscription->failed(),
+          "injected audio did not drain normally");
+    int audio_packets = 0;
+    rtsp::net::OutboundMessage first;
+    while (a.queue->try_pop(first)) {
+        rtsp::net::OutboundMessage second;
+        rtsp::net::OutboundMessage third;
+        check(b.queue->try_pop(second) && c.queue->try_pop(third)
+                  && first.kind == second.kind && first.kind == third.kind
+                  && first.wire == second.wire && first.wire == third.wire,
+              "audio source injection changed output");
+        if (first.kind != rtsp::net::OutboundKind::Rtp) { continue; }
+        rtsp::RtspStreamParser parser;
+        parser.append(first.wire.data(), first.wire.size());
+        rtsp::RtspStreamItem item;
+        check(parser.next(item) && item.is_interleaved, "invalid injected RTP");
+        if (item.channel != (with_video ? 2u : 0u)) { continue; }
+        const auto packet = rtsp::parse_rtp_packet(item.payload);
+        check(packet.payload_type == 97 && packet.timestamp == audio_packets * 1024u
+                  && packet.payload == std::string("\0\x10\0\x18\x11\x22\x33", 7),
+              "injected audio changed RTP mapping, timestamp or payload");
+        ++audio_packets;
+    }
+    check(audio_packets == 3 && b.queue->bytes() == 0 && c.queue->bytes() == 0,
+          "audio source injection lost or added packets");
+}
+
+class WaitingAudioSource final : public rtsp::AudioSource {
+public:
+    WaitingAudioSource() {
+        track_.media_type = "audio";
+        track_.control = "trackID=1";
+        track_.payload_type = 97;
+        track_.encoding = "MPEG4-GENERIC";
+        track_.clock_rate = 48000;
+        track_.channels = 2;
+        track_.fmtp = "streamtype=5;profile-level-id=1;mode=AAC-hbr;config=1190;"
+                      "SizeLength=13;IndexLength=3;IndexDeltaLength=3";
+    }
+    bool read(rtsp::AacAccessUnit& frame) override {
+        frame = {};
+        ++reads;
+        if (fail) { throw std::runtime_error("simulated live audio failure"); }
+        if (!ready) { return false; }
+        ready = false;
+        frame = {std::string("\x11\x22\x33", 3), pts, 1024};
+        return true;
+    }
+    bool ended() const override { return eof; }
+    const rtsp::MediaTrack& track() const override { return track_; }
+    bool is_live() const override { return true; }
+    void resume() override { ++resumes; }
+    void stop() override { ++stops; }
+    bool ready = false;
+    bool eof = false;
+    bool fail = false;
+    std::uint64_t pts = 0;
+    int reads = 0;
+    int resumes = 0;
+    int stops = 0;
+private:
+    rtsp::MediaTrack track_;
+};
+
+void test_audio_waiting_and_end() {
+    for (bool failure : {false, true}) {
+        auto input = std::make_unique<WaitingAudioSource>();
+        auto* source = input.get();
+        rtsp::MediaSession media(nullptr, std::move(input));
+        const auto now = Clock::now();
+        media.tick(now);
+        check(source->reads == 0 && !media.next_deadline(), "idle audio source advanced");
+        Peer peer(source->track());
+        check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started
+                  && source->resumes == 1, "live audio was not resumed");
+        media.tick(now);
+        check(!media.ended() && !peer.queue->closed()
+                  && media.next_deadline() == now + std::chrono::milliseconds(5),
+              "audio Waiting caused EOF or busy polling");
+        source->ready = true;
+        media.tick(now + std::chrono::milliseconds(5));
+        check(!media.ended() && !peer.queue->closed(), "audio Waiting after AU caused EOF");
+        source->fail = failure;
+        source->eof = !failure;
+        media.tick(now + std::chrono::milliseconds(10));
+        media.stop();
+        check(media.ended() && source->stops == 1 && peer.queue->closed()
+                  && peer.subscription->failed() == failure,
+              "audio EOF/failure did not stop source and subscription");
+        bool saw_rtp = false;
+        bool saw_final = false;
+        rtsp::net::OutboundMessage message;
+        while (peer.queue->try_pop(message)) {
+            saw_rtp = saw_rtp || message.kind == rtsp::net::OutboundKind::Rtp;
+            saw_final = saw_final || message.final_rtcp;
+        }
+        check(saw_rtp && saw_final == !failure, "audio failure corrupted final RTCP");
+    }
+}
+
+void test_audio_resume_and_stop() {
+    auto input = std::make_unique<WaitingAudioSource>();
+    auto* source = input.get();
+    rtsp::MediaSession media(nullptr, std::move(input));
+    Peer a(source->track());
+    Peer b(source->track());
+    Peer c(source->track());
+    check(media.subscribe(a.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "first audio subscriber failed");
+    source->ready = true;
+    const auto now = Clock::now();
+    media.tick(now);
+    source->ready = true;
+    source->pts = 48000;
+    media.tick(now);
+    const int reads = source->reads;
+    check(media.subscribe(b.subscription, "PLAY 200") == rtsp::SubscribeResult::Started
+              && source->resumes == 1, "late subscriber resumed shared audio");
+    media.tick(now);
+    check(source->reads == reads && media.next_deadline() == now + std::chrono::seconds(1),
+          "late subscriber discarded prefetched audio");
+    a.subscription->cancel();
+    b.subscription->cancel();
+    check(media.subscribe(c.subscription, "PLAY 200") == rtsp::SubscribeResult::Started
+              && source->resumes == 2, "audio did not resume after idle");
+    source->eof = true;
+    media.tick(now);
+    check(media.ended() && source->stops == 1, "audio resume retained stale prefetched AU");
+
+    auto idle = std::make_unique<WaitingAudioSource>();
+    auto* idle_source = idle.get();
+    rtsp::MediaSession stopped(nullptr, std::move(idle));
+    stopped.stop();
+    stopped.stop();
+    check(stopped.ended() && idle_source->stops == 1 && idle_source->reads == 0,
+          "explicit stop did not release idle audio exactly once");
+}
+
+void test_audio_wait_with_future_video() {
+    save_sample(3, 2);
+    auto input = std::make_unique<WaitingAudioSource>();
+    auto* source = input.get();
+    rtsp::MediaSession media(std::make_unique<rtsp::FileVideoSource>(input_path), std::move(input));
+    Peer peer(media.description().tracks[0]);
+    peer.subscription->add_track(1, media.description().tracks[1], {2, 3}, 200, 2);
+    check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "video/audio source subscription failed");
+    const auto now = Clock::now();
+    media.tick(now);
+    check(media.next_deadline() == now + std::chrono::milliseconds(5),
+          "future video suppressed audio retry");
+    source->ready = true;
+    source->pts = 240;
+    media.tick(now + std::chrono::milliseconds(5));
+    bool saw_audio = false;
+    rtsp::net::OutboundMessage message;
+    while (peer.queue->try_pop(message)) {
+        if (message.kind != rtsp::net::OutboundKind::Rtp) { continue; }
+        rtsp::RtspStreamParser parser;
+        parser.append(message.wire.data(), message.wire.size());
+        rtsp::RtspStreamItem item;
+        check(parser.next(item), "invalid live audio/video RTP");
+        saw_audio = saw_audio || item.channel == 2;
+    }
+    check(saw_audio && media.next_deadline() == now + std::chrono::milliseconds(10),
+          "audio did not send before future video");
+    source->eof = true;
+    media.tick(now + std::chrono::milliseconds(10));
+    check(!media.ended() && media.next_deadline() == now + std::chrono::milliseconds(40),
+          "audio EOF stopped video or retained retry");
+    media.tick(now + std::chrono::milliseconds(100));
+    check(media.ended() && source->stops == 1 && !peer.subscription->failed(),
+          "video did not drain after audio EOF");
+}
+
+void test_empty_audio_video_sources() {
+    bool rejected = false;
+    try {
+        rtsp::MediaSession media(std::unique_ptr<rtsp::VideoSource>{},
+                                std::unique_ptr<rtsp::AudioSource>{});
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    check(rejected, "session accepted two empty sources");
+}
+
 // 同一个测试线程驱动收发，验证控制阶段和播放阶段都能安全关闭。
 void test_connection_stop(bool playing) {
     save_sample(20, 5);
@@ -414,13 +643,21 @@ int main() {
         test_injected_file_source();
         test_live_waiting_and_end();
         test_live_wait_with_future_audio();
+        test_injected_audio_file(false);
+        test_injected_audio_file(true);
+        test_audio_waiting_and_end();
+        test_audio_resume_and_stop();
+        test_audio_wait_with_future_video();
+        test_empty_audio_video_sources();
         test_connection_stop(false);
         test_connection_stop(true);
         std::remove(input_path.c_str());
+        std::remove(audio_input_path.c_str());
         std::cout << "PASS: shared source, late IDR, independent RTP, pause, cancellation, slow peer and EOF\n";
         return 0;
     } catch (const std::exception& error) {
         std::remove(input_path.c_str());
+        std::remove(audio_input_path.c_str());
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }

@@ -1,5 +1,6 @@
 #include "media/aac_file_reader.h"
 #include "media/aac_packetizer.h"
+#include "media/file_audio_source.h"
 
 #include <cstdio>
 #include <fstream>
@@ -64,6 +65,36 @@ void test_reader_and_payload() {
           "44.1 kHz mono config was not parsed");
 }
 
+void test_file_audio_source() {
+    save(sample + sample);
+    rtsp::FileAudioSource file(path);
+    rtsp::AudioSource& source = file;
+    check(std::remove(path.c_str()) == 0, "audio source kept file open");
+    const auto& track = source.track();
+    check(!source.is_live() && !source.ended() && track.media_type == "audio"
+              && track.control == "trackID=1" && track.payload_type == 97
+              && track.clock_rate == 48000 && track.channels == 2
+              && track.fmtp.find("config=1190") != std::string::npos,
+          "file audio source changed track configuration");
+    rtsp::AacAccessUnit frame;
+    check(source.read(frame) && frame.pts == 0 && frame.duration == 1024
+              && frame.data == std::string("\x11\x22\x33", 3),
+          "file audio source changed first AU");
+    source.resume();
+    source.stop();
+    source.stop();
+    check(source.read(frame) && frame.pts == 1024 && source.ended(),
+          "file audio source reset progress or lost EOF");
+    check(!source.read(frame) && frame.data.empty(), "file audio source returned stale AU");
+    bool rejected = false;
+    try {
+        rtsp::FileAudioSource missing(path);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    check(rejected, "audio source accepted missing file");
+}
+
 void reject(const std::string& data) {
     save(data);
     bool rejected = false;
@@ -74,6 +105,13 @@ void reject(const std::string& data) {
         rejected = true;
     }
     check(rejected, "invalid ADTS input was accepted");
+    rejected = false;
+    try {
+        rtsp::FileAudioSource source(path);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    check(rejected, "file audio source accepted invalid ADTS input");
 }
 
 void test_invalid_input() {
@@ -122,6 +160,7 @@ void test_invalid_input() {
 int main() {
     try {
         test_reader_and_payload();
+        test_file_audio_source();
         test_invalid_input();
         std::remove(path.c_str());
         std::cout << "PASS: ADTS, CRC header, AAC config, AU headers, sample clock and invalid input\n";

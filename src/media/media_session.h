@@ -1,6 +1,6 @@
 #pragma once
 
-#include "media/aac_file_reader.h"
+#include "media/audio_source.h"
 #include "media/aac_packetizer.h"
 #include "media/video_source.h"
 #include "media/h264_packetizer.h"
@@ -94,6 +94,9 @@ public:
     // 接管视频源；nullptr 表示关闭视频轨道。源须在构造时准备好轨道配置。
     explicit MediaSession(std::unique_ptr<VideoSource> video_source,
                           const std::string& audio_path = "");
+    // 接管音视频源；nullptr 关闭对应轨道，至少提供一个源。
+    MediaSession(std::unique_ptr<VideoSource> video_source,
+                 std::unique_ptr<AudioSource> audio_source);
     ~MediaSession();
 
     const SessionDescription& description() const;
@@ -115,7 +118,7 @@ private:
     SessionDescription description_;
     MediaClock clock_;
     std::unique_ptr<VideoSource> video_source_;
-    std::unique_ptr<AacFileReader> audio_source_;
+    std::unique_ptr<AudioSource> audio_source_;
     H264Packetizer video_packetizer_;
     AacPacketizer audio_packetizer_;
     std::size_t video_track_ = 0;

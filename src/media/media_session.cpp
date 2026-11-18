@@ -1,5 +1,6 @@
 #include "media/media_session.h"
 #include "media/file_video_source.h"
+#include "media/file_audio_source.h"
 #include "rtsp/rtsp_stream_parser.h"
 
 #include <chrono>
@@ -239,20 +240,23 @@ MediaSession::MediaSession(const std::string& video_path, const std::string& aud
                    audio_path) {}
 
 MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source, const std::string& audio_path)
-    : video_source_(std::move(video_source)) {
+    : MediaSession(std::move(video_source),
+                   audio_path.empty() ? nullptr : std::make_unique<FileAudioSource>(audio_path)) {}
+
+MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source,
+                           std::unique_ptr<AudioSource> audio_source)
+    : video_source_(std::move(video_source)), audio_source_(std::move(audio_source)) {
     description_.tracks.clear();
     if (video_source_) {
         video_track_ = description_.tracks.size();
         description_.tracks.push_back(video_source_->track());
     }
-    if (!audio_path.empty()) {
-        audio_source_ = std::make_unique<AacFileReader>();
-        audio_source_->open(audio_path);
+    if (audio_source_) {
         audio_track_ = description_.tracks.size();
         description_.tracks.push_back(audio_source_->track());
     }
     if (description_.tracks.empty()) {
-        throw std::invalid_argument("provide a video or audio file");
+        throw std::invalid_argument("provide a video or audio source");
     }
 }
 
@@ -293,6 +297,10 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
             video_.reset();
             video_source_->resume();
         }
+        if (audio_source_ && audio_source_->is_live()) {
+            audio_.reset();
+            audio_source_->resume();
+        }
         reset_clock_ = true;
         next_deadline_ = Clock::now();
     }
@@ -319,6 +327,7 @@ void MediaSession::finish(bool failed) {
     if (ended_) { return; }
     ended_ = true;
     if (video_source_) { video_source_->stop(); }
+    if (audio_source_) { audio_source_->stop(); }
     next_deadline_.reset();
     video_.reset();
     audio_.reset();
@@ -399,8 +408,9 @@ void MediaSession::tick(Clock::time_point now) {
             }
             next_deadline_ = clock_origin_ + media_time;
             if (now < *next_deadline_) {
-                if (!video_ && video_source_ && !video_source_->ended()) {
-                    // 音频已有未来帧时，也要短期重查尚未就绪的视频。
+                if ((!video_ && video_source_ && !video_source_->ended())
+                    || (!audio_ && audio_source_ && !audio_source_->ended())) {
+                    // 一轨已有未来帧时，也要短期重查尚未就绪的另一轨。
                     const auto retry = now + std::chrono::milliseconds(5);
                     if (retry < *next_deadline_) { next_deadline_ = retry; }
                 }
