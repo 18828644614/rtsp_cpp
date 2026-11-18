@@ -21,7 +21,11 @@ struct H264EncoderConfig {
     std::string pixel_format = "yuyv422";
 };
 
-enum class EncoderTimestampMode { Unset, Source, FrameRate };
+enum class EncoderTimestampMode {
+    Unset,
+    Source,
+    FrameRate
+};
 
 // 单个所有者线程顺序调用；输入帧只读，输出拥有独立的 NALU 字节。
 // 首版颜色约定：limited-range BT.601 YUYV 或 full-range BGR，输出 limited BT.601。

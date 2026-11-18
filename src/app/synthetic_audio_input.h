@@ -22,14 +22,25 @@ public:
     AudioInputResult read(AudioFrame& frame, std::chrono::milliseconds timeout) override {
         frame = {};
         std::unique_lock<std::mutex> lock(mutex_);
-        if (stopped_ || (total_ && position_ >= total_)) { return AudioInputResult::Ended; }
+        if (stopped_ || (total_ && position_ >= total_)) {
+            return AudioInputResult::Ended;
+        }
         if (realtime_) {
-            if (!started_) { origin_ = std::chrono::steady_clock::now(); started_ = true; }
+            if (!started_) {
+                origin_ = std::chrono::steady_clock::now();
+                started_ = true;
+            }
             const auto due = origin_ + std::chrono::microseconds(position_ * 1000000 / rate_);
             wake_.wait_until(lock, std::min(due, std::chrono::steady_clock::now() + timeout),
-                             [this] { return stopped_; });
-            if (stopped_) { return AudioInputResult::Ended; }
-            if (std::chrono::steady_clock::now() < due) { return AudioInputResult::Waiting; }
+                             [this] {
+                                 return stopped_;
+                             });
+            if (stopped_) {
+                return AudioInputResult::Ended;
+            }
+            if (std::chrono::steady_clock::now() < due) {
+                return AudioInputResult::Waiting;
+            }
         }
         const int count = static_cast<int>(std::min<std::int64_t>(333,
             total_ ? total_ - position_ : 333));

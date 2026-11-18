@@ -34,13 +34,17 @@ public:
             throw std::runtime_error("register console control handler failed");
         }
     }
-    ~ConsoleScope() { SetConsoleCtrlHandler(on_console_control, FALSE); }
+    ~ConsoleScope() {
+        SetConsoleCtrlHandler(on_console_control, FALSE);
+    }
 };
 
 std::string utf8(const wchar_t* value) {
     const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
         nullptr, 0, nullptr, nullptr);
-    if (size <= 0) { throw std::invalid_argument("invalid Unicode argument"); }
+    if (size <= 0) {
+        throw std::invalid_argument("invalid Unicode argument");
+    }
     std::string result(static_cast<std::size_t>(size), '\0');
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, result.data(), size, nullptr, nullptr);
     result.pop_back();
@@ -48,7 +52,9 @@ std::string utf8(const wchar_t* value) {
 }
 
 int number(const std::string& text, int minimum, int maximum) {
-    if (text.empty()) { throw std::invalid_argument("empty number"); }
+    if (text.empty()) {
+        throw std::invalid_argument("empty number");
+    }
     int value = 0;
     for (const char ch : text) {
         if (ch < '0' || ch > '9' || value > (maximum - (ch - '0')) / 10) {
@@ -56,7 +62,9 @@ int number(const std::string& text, int minimum, int maximum) {
         }
         value = value * 10 + ch - '0';
     }
-    if (value < minimum || value > maximum) { throw std::invalid_argument("number out of range: " + text); }
+    if (value < minimum || value > maximum) {
+        throw std::invalid_argument("number out of range: " + text);
+    }
     return value;
 }
 
@@ -91,32 +99,61 @@ int wmain(int argc, wchar_t* argv[]) {
         bool explicit_gop = false;
         for (int index = 1; index < argc; ++index) {
             const auto option = utf8(argv[index]);
-            if (option == "--help") { usage(); return 0; }
-            if (option == "--synthetic") { synthetic_explicit = true; continue; }
-            if (option == "--list") { list = true; continue; }
-            if (option == "--quiet") { quiet = true; continue; }
+            if (option == "--help") {
+                usage();
+                return 0;
+            }
+            if (option == "--synthetic") {
+                synthetic_explicit = true;
+                continue;
+            }
+            if (option == "--list") {
+                list = true;
+                continue;
+            }
+            if (option == "--quiet") {
+                quiet = true;
+                continue;
+            }
             if (option != "--width" && option != "--height" && option != "--fps" &&
                 option != "--fps-den" && option != "--pixel-format" && option != "--bitrate" &&
                 option != "--gop" && option != "--frames" && option != "--timeout-ms" &&
                 option != "--output" && option != "--device" && option != "--device-index") {
                 throw std::invalid_argument("unknown option: " + option);
             }
-            if (++index == argc) { throw std::invalid_argument("missing value for " + option); }
+            if (++index == argc) {
+                throw std::invalid_argument("missing value for " + option);
+            }
             const auto value = utf8(argv[index]);
-            if (option == "--width") { config.width = number(value, 2, 16384); }
-            else if (option == "--height") { config.height = number(value, 2, 16384); }
-            else if (option == "--fps") { config.fps_num = number(value, 1, 10000000); }
-            else if (option == "--fps-den") { config.fps_den = number(value, 1, 10000000); }
-            else if (option == "--pixel-format") { config.pixel_format = value; }
-            else if (option == "--bitrate") { config.bitrate = number(value, 1, std::numeric_limits<int>::max()); }
-            else if (option == "--gop") { config.gop = number(value, 1, 10000); explicit_gop = true; }
-            else if (option == "--frames") { frames = number(value, 0, 1000000); }
-            else if (option == "--timeout-ms") { timeout_ms = number(value, 1, 60000); }
-            else if (option == "--output") { output_path = value; }
-            else if (option == "--device") {
-                if (value.empty()) { throw std::invalid_argument("empty camera name"); }
+            if (option == "--width") {
+                config.width = number(value, 2, 16384);
+            } else if (option == "--height") {
+                config.height = number(value, 2, 16384);
+            } else if (option == "--fps") {
+                config.fps_num = number(value, 1, 10000000);
+            } else if (option == "--fps-den") {
+                config.fps_den = number(value, 1, 10000000);
+            } else if (option == "--pixel-format") {
+                config.pixel_format = value;
+            } else if (option == "--bitrate") {
+                config.bitrate = number(value, 1, std::numeric_limits<int>::max());
+            } else if (option == "--gop") {
+                config.gop = number(value, 1, 10000);
+                explicit_gop = true;
+            } else if (option == "--frames") {
+                frames = number(value, 0, 1000000);
+            } else if (option == "--timeout-ms") {
+                timeout_ms = number(value, 1, 60000);
+            } else if (option == "--output") {
+                output_path = value;
+            } else if (option == "--device") {
+                if (value.empty()) {
+                    throw std::invalid_argument("empty camera name");
+                }
                 device = value;
-            } else if (option == "--device-index") { device_index = number(value, 0, 10000); }
+            } else if (option == "--device-index") {
+                device_index = number(value, 0, 10000);
+            }
         }
         if (!device.empty() && device_index >= 0) {
             throw std::invalid_argument("--device and --device-index are mutually exclusive");
@@ -142,9 +179,13 @@ int wmain(int argc, wchar_t* argv[]) {
             device = devices[static_cast<std::size_t>(device_index)].name;
         }
 #else
-        if (list || camera_input) { throw std::invalid_argument("camera input requires ENABLE_CAMERA_CAPTURE=ON"); }
+        if (list || camera_input) {
+            throw std::invalid_argument("camera input requires ENABLE_CAMERA_CAPTURE=ON");
+        }
 #endif
-        if (output_path.empty()) { throw std::invalid_argument("--output FILE is required"); }
+        if (output_path.empty()) {
+            throw std::invalid_argument("--output FILE is required");
+        }
         ConsoleScope console;
 #ifdef RTSP_HAS_CAMERA_CAPTURE
         rtsp::CameraCapture capture;
@@ -162,23 +203,32 @@ int wmain(int argc, wchar_t* argv[]) {
             config.fps_den = actual.fps_den;
         }
 #endif
-        if (!explicit_gop) { config.gop = std::max(1, config.fps_num / config.fps_den); }
+        if (!explicit_gop) {
+            config.gop = std::max(1, config.fps_num / config.fps_den);
+        }
         rtsp::H264Encoder encoder;
         encoder.open(config);
         rtsp::H264FileWriter writer;
         writer.open(output_path);
         std::ofstream timing(output_path + ".csv", std::ios::trunc);
-        if (!timing) { throw std::runtime_error("open timing CSV failed"); }
+        if (!timing) {
+            throw std::runtime_error("open timing CSV failed");
+        }
         timing << "index,pts_90k,duration_90k,idr,nalus,bytes\n";
         std::uint64_t au_count = 0;
         std::uint64_t byte_count = 0;
         const auto save = [&](const std::vector<rtsp::H264AccessUnit>& units) {
             for (const auto& unit : units) {
                 std::size_t bytes = 0;
-                for (const auto& nalu : unit.nalus) { writer.write(nalu); bytes += nalu.size(); }
+                for (const auto& nalu : unit.nalus) {
+                    writer.write(nalu);
+                    bytes += nalu.size();
+                }
                 timing << au_count << ',' << unit.pts << ',' << unit.duration << ','
                        << unit.is_keyframe << ',' << unit.nalus.size() << ',' << bytes << '\n';
-                if (!timing) { throw std::runtime_error("write timing CSV failed"); }
+                if (!timing) {
+                    throw std::runtime_error("write timing CSV failed");
+                }
                 if (!quiet || au_count == 0) {
                     std::cout << "[au] n=" << au_count << " pts=" << unit.pts << " duration=" << unit.duration
                               << " idr=" << unit.is_keyframe << " nalus=" << unit.nalus.size() << " bytes=" << bytes << '\n';
@@ -194,8 +244,12 @@ int wmain(int argc, wchar_t* argv[]) {
 #ifdef RTSP_HAS_CAMERA_CAPTURE
             if (camera_input) {
                 const auto result = capture.read(frame, std::chrono::milliseconds(100));
-                if (result == rtsp::CaptureResult::Stopped) { break; }
-                if (result == rtsp::CaptureResult::Failed) { throw std::runtime_error(capture.last_error()); }
+                if (result == rtsp::CaptureResult::Stopped) {
+                    break;
+                }
+                if (result == rtsp::CaptureResult::Failed) {
+                    throw std::runtime_error(capture.last_error());
+                }
                 if (result == rtsp::CaptureResult::Timeout) {
                     if (std::chrono::steady_clock::now() - last_frame >= std::chrono::milliseconds(timeout_ms)) {
                         throw std::runtime_error("camera no-frame timeout");
@@ -220,10 +274,16 @@ int wmain(int argc, wchar_t* argv[]) {
         (void)last_frame;
 #endif
         save(encoder.flush());
-        if (au_count != static_cast<std::uint64_t>(input_count)) { throw std::runtime_error("input/output frame count mismatch"); }
-        if (au_count) { std::cout << "[encoder] fmtp=" << rtsp::make_h264_fmtp(encoder.sps(), encoder.pps()) << '\n'; }
+        if (au_count != static_cast<std::uint64_t>(input_count)) {
+            throw std::runtime_error("input/output frame count mismatch");
+        }
+        if (au_count) {
+            std::cout << "[encoder] fmtp=" << rtsp::make_h264_fmtp(encoder.sps(), encoder.pps()) << '\n';
+        }
         timing.close();
-        if (!timing) { throw std::runtime_error("close timing CSV failed"); }
+        if (!timing) {
+            throw std::runtime_error("close timing CSV failed");
+        }
         writer.close();
         std::cout << "[encoder] input=" << (camera_input ? "camera" : "synthetic")
                   << " frames=" << input_count << " access_units=" << au_count << " nalu_bytes=" << byte_count

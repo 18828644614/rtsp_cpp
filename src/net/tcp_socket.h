@@ -8,7 +8,11 @@
 
 namespace rtsp::net {
 
-enum class IoStatus { Done, WouldBlock, Eof };
+enum class IoStatus {
+    Done,
+    WouldBlock,
+    Eof
+};
 
 struct IoResult {
     IoStatus status = IoStatus::WouldBlock;

@@ -168,7 +168,7 @@ void send_text(TcpSocket& client, const std::string& text) {
 
 void setup_play(TcpSocket& client, rtsp::RtspStreamParser& parser) {
     send_text(client, "SETUP rtsp://127.0.0.1/live/trackID=0 RTSP/1.0\r\nCSeq: 1\r\n"
-              "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
+                      "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
     const auto setup = receive_item(client, parser);
     check(!setup.is_interleaved && setup.message.status_code == 200, "event SETUP failed");
     send_text(client, "PLAY rtsp://127.0.0.1/live RTSP/1.0\r\nCSeq: 2\r\nSession: "
@@ -212,7 +212,9 @@ void test_half_close_and_timeouts() {
     test::DrivenConnection stalled_connection(media);
     check(stalled_connection.accept_from(listener), "stalled accept failed");
     send_text(stalled, "OPTIONS * RTSP/1.0\r\nCSeq: 1\r\n\r\n");
-    wait_for([&] { return stalled_connection.wants_write(); });
+    wait_for([&] {
+        return stalled_connection.wants_write();
+    });
     const auto now = Clock::now();
     stalled_connection.check_timeout(now);
     stalled_connection.check_timeout(now + std::chrono::seconds(3));
@@ -288,7 +290,9 @@ void test_slow_connection_isolation() {
     parser.finish();
     depacketizer.finish();
     test::wait_finished(healthy_connection);
-    wait_for([&] { return slow_connection.finished(); });
+    wait_for([&] {
+        return slow_connection.finished();
+    });
     check(pictures >= frames - 3 && pictures == complete_units,
           "healthy client lost pictures due to slow client");
 }
@@ -298,20 +302,30 @@ void test_server_stop() {
     rtsp::RtspServer server("127.0.0.1", 0, sample_path);
     std::exception_ptr failure;
     std::thread worker([&] {
-        try { server.run(); } catch (...) { failure = std::current_exception(); }
+        try {
+            server.run();
+        } catch (...) {
+            failure = std::current_exception();
+        }
     });
     try {
-        wait_for([&] { return server.local_port() != 0; });
+        wait_for([&] {
+            return server.local_port() != 0;
+        });
         TcpSocket client;
         client.connect("127.0.0.1", server.local_port());
-        wait_for([&] { return server.connection_count() == 1; });
+        wait_for([&] {
+            return server.connection_count() == 1;
+        });
         std::vector<std::unique_ptr<TcpSocket>> extra;
         for (std::size_t i = 0; i < rtsp::net::EventLoop::capacity - 1; ++i) {
             auto socket = std::make_unique<TcpSocket>();
             socket->connect("127.0.0.1", server.local_port());
             extra.push_back(std::move(socket));
         }
-        wait_for([&] { return server.connection_count() == rtsp::net::EventLoop::capacity - 1; });
+        wait_for([&] {
+            return server.connection_count() == rtsp::net::EventLoop::capacity - 1;
+        });
         char buffer[1024];
         check(extra.back()->wait_readable(2000) && extra.back()->receive(buffer, sizeof(buffer)) == 0,
               "connection beyond select capacity was not rejected");
@@ -333,10 +347,14 @@ void test_server_stop() {
         worker.join();
         check(Clock::now() - start < std::chrono::seconds(1) && server.connection_count() == 0,
               "stop did not wake and release event connections");
-        if (failure) { std::rethrow_exception(failure); }
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
     } catch (...) {
         server.stop();
-        if (worker.joinable()) { worker.join(); }
+        if (worker.joinable()) {
+            worker.join();
+        }
         throw;
     }
 }
@@ -376,7 +394,9 @@ void test_media_deadlines_and_budget() {
     media.tick(delayed);
     int markers = 0;
     while (queue->try_pop(message)) {
-        if (message.kind == rtsp::net::OutboundKind::Rtcp) { continue; }
+        if (message.kind == rtsp::net::OutboundKind::Rtcp) {
+            continue;
+        }
         rtsp::RtspStreamParser parser;
         parser.append(message.wire.data(), message.wire.size());
         rtsp::RtspStreamItem item;

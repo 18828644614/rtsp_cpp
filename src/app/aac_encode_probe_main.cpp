@@ -16,14 +16,18 @@ namespace {
 
 std::atomic<bool> stopped{false};
 BOOL WINAPI console_control(DWORD event) {
-    if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) { return FALSE; }
+    if (event != CTRL_C_EVENT && event != CTRL_BREAK_EVENT) {
+        return FALSE;
+    }
     stopped.store(true);
     return TRUE;
 }
 
 std::string utf8(const wchar_t* value) {
     const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, nullptr, 0, nullptr, nullptr);
-    if (count <= 0) { throw std::invalid_argument("invalid Unicode argument"); }
+    if (count <= 0) {
+        throw std::invalid_argument("invalid Unicode argument");
+    }
     std::string text(static_cast<std::size_t>(count), '\0');
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1, text.data(), count, nullptr, nullptr);
     text.pop_back();
@@ -59,22 +63,37 @@ int wmain(int argc, wchar_t* argv[]) {
                           << "Writes ADTS, FILE.csv timestamps, and FILE.json padding evidence.\n";
                 return 0;
             }
-            if (!seen.insert(option).second) { throw std::invalid_argument("duplicate option: " + option); }
-            if (option == "--synthetic") { synthetic = true; continue; }
+            if (!seen.insert(option).second) {
+                throw std::invalid_argument("duplicate option: " + option);
+            }
+            if (option == "--synthetic") {
+                synthetic = true;
+                continue;
+            }
             if (option != "--seconds" && option != "--device" && option != "--device-index" && option != "--output") {
                 throw std::invalid_argument("unknown option: " + option);
             }
-            if (++index == argc) { throw std::invalid_argument("missing value for " + option); }
+            if (++index == argc) {
+                throw std::invalid_argument("missing value for " + option);
+            }
             const auto value = utf8(argv[index]);
-            if (value.empty() || value.compare(0, 2, "--") == 0) { throw std::invalid_argument("missing value for " + option); }
-            if (option == "--device") { device = value; }
-            else if (option == "--output") { output = value; }
-            else {
+            if (value.empty() || value.compare(0, 2, "--") == 0) {
+                throw std::invalid_argument("missing value for " + option);
+            }
+            if (option == "--device") {
+                device = value;
+            } else if (option == "--output") {
+                output = value;
+            } else {
                 const auto number = rtsp::app::parse_frame_limit(value);
                 if (option == "--seconds") {
-                    if (number == 0 || number > 3600) { throw std::invalid_argument("seconds must be 1..3600"); }
+                    if (number == 0 || number > 3600) {
+                        throw std::invalid_argument("seconds must be 1..3600");
+                    }
                     seconds = static_cast<int>(number);
-                } else { device_index = static_cast<int>(number); }
+                } else {
+                    device_index = static_cast<int>(number);
+                }
             }
         }
         if ((synthetic ? 1 : 0) + (!device.empty() ? 1 : 0) + (device_index >= 0 ? 1 : 0) != 1) {
@@ -87,7 +106,9 @@ int wmain(int argc, wchar_t* argv[]) {
 #ifdef RTSP_HAS_MICROPHONE_CAPTURE
             if (device_index >= 0) {
                 const auto devices = rtsp::MicrophoneCapture::enumerate_devices();
-                if (static_cast<std::size_t>(device_index) >= devices.size()) { throw std::invalid_argument("microphone index out of range"); }
+                if (static_cast<std::size_t>(device_index) >= devices.size()) {
+                    throw std::invalid_argument("microphone index out of range");
+                }
                 device = devices[static_cast<std::size_t>(device_index)].name;
             }
             rtsp::MicrophoneConfig capture;
@@ -97,7 +118,9 @@ int wmain(int argc, wchar_t* argv[]) {
             throw std::invalid_argument("microphone input requires ENABLE_MICROPHONE_CAPTURE=ON");
 #endif
         }
-        if (!SetConsoleCtrlHandler(console_control, TRUE)) { throw std::runtime_error("could not install console handler"); }
+        if (!SetConsoleCtrlHandler(console_control, TRUE)) {
+            throw std::runtime_error("could not install console handler");
+        }
         std::ofstream file(std::filesystem::u8path(output), std::ios::binary);
         std::ofstream csv(std::filesystem::u8path(output + ".csv"));
         file.exceptions(std::ios::badbit | std::ios::failbit);
@@ -117,7 +140,9 @@ int wmain(int argc, wchar_t* argv[]) {
         while (!stopped.load() && (synthetic || std::chrono::steady_clock::now() < deadline)) {
             rtsp::AudioFrame frame;
             const auto result = input->read(frame, std::chrono::milliseconds(50));
-            if (result == rtsp::AudioInputResult::Ended) { break; }
+            if (result == rtsp::AudioInputResult::Ended) {
+                break;
+            }
             if (result == rtsp::AudioInputResult::Waiting) {
                 if (std::chrono::steady_clock::now() - last_data > std::chrono::seconds(5)) {
                     throw std::runtime_error("microphone produced no PCM for 5 seconds");
@@ -126,7 +151,9 @@ int wmain(int argc, wchar_t* argv[]) {
             }
             last_data = std::chrono::steady_clock::now();
             csv << "pcm,";
-            if (frame.source_pts) { csv << *frame.source_pts; }
+            if (frame.source_pts) {
+                csv << *frame.source_pts;
+            }
             csv << ',' << frame.nb_samples << ',' << frame.sample_rate << '\n';
             publish(encoder.encode(frame));
         }

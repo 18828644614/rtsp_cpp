@@ -7,7 +7,9 @@
 namespace rtsp {
 
 inline std::int64_t rescale_media_pts(std::int64_t pts, int from_rate, int to_rate) {
-    if (from_rate <= 0 || to_rate <= 0) { throw std::invalid_argument("invalid media clock rate"); }
+    if (from_rate <= 0 || to_rate <= 0) {
+        throw std::invalid_argument("invalid media clock rate");
+    }
     const auto maximum = std::numeric_limits<std::int64_t>::max();
     const auto minimum = std::numeric_limits<std::int64_t>::min();
     const auto seconds = pts / from_rate;
@@ -25,7 +27,9 @@ inline std::int64_t rescale_media_pts(std::int64_t pts, int from_rate, int to_ra
 
 inline bool media_pts_less(std::int64_t first, int first_rate,
                             std::int64_t second, int second_rate) {
-    if (first_rate <= 0 || second_rate <= 0) { throw std::invalid_argument("invalid media clock rate"); }
+    if (first_rate <= 0 || second_rate <= 0) {
+        throw std::invalid_argument("invalid media clock rate");
+    }
     if (first / first_rate != second / second_rate) {
         return first / first_rate < second / second_rate;
     }

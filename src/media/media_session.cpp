@@ -88,16 +88,19 @@ void MediaSubscription::end() {
 std::string MediaSubscription::rtp_info(const std::string& base_url) const {
     std::string info;
     for (const auto& track : tracks_) {
-        if (!info.empty()) { info += ','; }
-        info += "url=" + resolve_control_url(base_url, track.control)
-                + ";seq=" + std::to_string(track.sender->next_sequence());
+        if (!info.empty()) {
+            info += ',';
+        }
+        info += "url=" + resolve_control_url(base_url, track.control) + ";seq=" + std::to_string(track.sender->next_sequence());
     }
     return info;
 }
 
 void MediaSubscription::on_sent(const net::OutboundMessage& message) {
     for (auto& track : tracks_) {
-        if (track.sender->ssrc() != message.ssrc) { continue; }
+        if (track.sender->ssrc() != message.ssrc) {
+            continue;
+        }
         if (message.kind == net::OutboundKind::Rtp) {
             ++track.packets;
             track.octets += static_cast<std::uint32_t>(message.rtp_payload_bytes);
@@ -110,11 +113,15 @@ void MediaSubscription::on_sent(const net::OutboundMessage& message) {
 
 void MediaSubscription::tick_rtcp(MediaClock::Clock::time_point now,
                                    std::chrono::milliseconds interval) {
-    if (!active_ || queue_->closed()) { return; }
+    if (!active_ || queue_->closed()) {
+        return;
+    }
     for (auto& track : tracks_) {
         if (track.packets != 0 && !track.report_pending
             && (!track.next_report || now >= *track.next_report)) {
-            if (!queue_report(track, false)) { return; }
+            if (!queue_report(track, false)) {
+                return;
+            }
             track.next_report = now + interval;
         }
     }
@@ -122,11 +129,17 @@ void MediaSubscription::tick_rtcp(MediaClock::Clock::time_point now,
 
 std::optional<MediaClock::Clock::time_point> MediaSubscription::next_rtcp_deadline() const {
     std::optional<MediaClock::Clock::time_point> next;
-    if (!active_) { return next; }
+    if (!active_) {
+        return next;
+    }
     for (const auto& track : tracks_) {
-        if (track.packets == 0 || track.report_pending) { continue; }
+        if (track.packets == 0 || track.report_pending) {
+            continue;
+        }
         const auto deadline = track.next_report.value_or(MediaClock::Clock::now());
-        if (!next || deadline < *next) { next = deadline; }
+        if (!next || deadline < *next) {
+            next = deadline;
+        }
     }
     return next;
 }
@@ -150,9 +163,13 @@ bool MediaSubscription::receive_rtcp(unsigned int channel, const std::string& wi
     const auto packets = parse_rtcp_compound(wire);  // 完整校验后再更新反馈和保活。
     bool matched = false;
     for (auto& track : tracks_) {
-        if (channel != static_cast<unsigned int>(track.transport.rtcp_channel)) { continue; }
+        if (channel != static_cast<unsigned int>(track.transport.rtcp_channel)) {
+            continue;
+        }
         for (const auto& packet : packets) {
-            if (packet.type != 201 || packet.ssrc == 0) { continue; }
+            if (packet.type != 201 || packet.ssrc == 0) {
+                continue;
+            }
             for (const auto& report : packet.reports) {
                 if (report.ssrc == track.sender->ssrc() && track.packets != 0) {
                     track.receiver = report;
@@ -166,7 +183,9 @@ bool MediaSubscription::receive_rtcp(unsigned int channel, const std::string& wi
 
 std::optional<RtcpReceptionReport> MediaSubscription::receiver_report(std::uint32_t ssrc) const {
     for (const auto& track : tracks_) {
-        if (track.sender->ssrc() == ssrc) { return track.receiver; }
+        if (track.sender->ssrc() == ssrc) {
+            return track.receiver;
+        }
     }
     return std::nullopt;
 }
@@ -327,10 +346,16 @@ const MediaClock& MediaSession::clock() const {
 }
 
 void MediaSession::finish(bool failed) {
-    if (ended_) { return; }
+    if (ended_) {
+        return;
+    }
     ended_ = true;
-    if (video_source_) { video_source_->stop(); }
-    if (audio_source_) { audio_source_->stop(); }
+    if (video_source_) {
+        video_source_->stop();
+    }
+    if (audio_source_) {
+        audio_source_->stop();
+    }
     next_deadline_.reset();
     video_.reset();
     audio_.reset();
@@ -416,7 +441,9 @@ void MediaSession::tick(Clock::time_point now) {
                     || (!audio_ && audio_source_ && !audio_source_->ended())) {
                     // 一轨已有未来帧时，也要短期重查尚未就绪的另一轨。
                     const auto retry = now + std::chrono::milliseconds(5);
-                    if (retry < *next_deadline_) { next_deadline_ = retry; }
+                    if (retry < *next_deadline_) {
+                        next_deadline_ = retry;
+                    }
                 }
                 return;
             }

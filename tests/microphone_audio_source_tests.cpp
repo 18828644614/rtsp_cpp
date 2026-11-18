@@ -9,7 +9,11 @@
 namespace {
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
-void check(bool ok, const char* message) { if (!ok) { throw std::runtime_error(message); } }
+void check(bool ok, const char* message) {
+    if (!ok) {
+        throw std::runtime_error(message);
+    }
+}
 
 struct State {
     std::mutex mutex;
@@ -40,8 +44,12 @@ public:
                 return rtsp::AudioInputResult::FrameReady;
             }
         }
-        state_->wake.wait_for(lock, timeout, [&] { return state_->stopped || state_->ended || state_->failed; });
-        if (state_->failed) { throw std::runtime_error("simulated microphone failure"); }
+        state_->wake.wait_for(lock, timeout, [&] {
+            return state_->stopped || state_->ended || state_->failed;
+        });
+        if (state_->failed) {
+            throw std::runtime_error("simulated microphone failure");
+        }
         return state_->stopped || state_->ended ? rtsp::AudioInputResult::Ended : rtsp::AudioInputResult::Waiting;
     }
 
@@ -81,14 +89,18 @@ void lifecycle() {
                     check(unit.pts == previous + 1024, "audio source lost or reordered packets");
                     previous = unit.pts;
                     ++frames;
-                } else { std::this_thread::yield(); }
+                } else {
+                    std::this_thread::yield();
+                }
             }
         } catch (const std::runtime_error& error) {
             check(std::string(error.what()) == "simulated microphone failure", "unexpected source error");
             raised = true;
         }
         check(raised == failure && frames > 0, "source did not drain data before EOF/error");
-        if (!failure) { check(frames == 4, "normal EOF lost FIFO tail or delayed AAC"); }
+        if (!failure) {
+            check(frames == 4, "normal EOF lost FIFO tail or delayed AAC");
+        }
         check(source.queue_stats().dropped == 0, "test queue unexpectedly overflowed");
         source.stop();
         source.stop();
@@ -102,8 +114,11 @@ void lifecycle() {
         config.read_timeout = 10ms;
         std::atomic<bool> stopped{cancellation};
         bool raised = false;
-        try { rtsp::MicrophoneAudioSource source(std::make_unique<ControlledInput>(state, false), config, &stopped); }
-        catch (const std::runtime_error&) { raised = true; }
+        try {
+            rtsp::MicrophoneAudioSource source(std::make_unique<ControlledInput>(state, false), config, &stopped);
+        } catch (const std::runtime_error&) {
+            raised = true;
+        }
         check(raised && state->closed.load(), "startup timeout/cancellation did not close input");
     }
 
@@ -116,7 +131,11 @@ void lifecycle() {
     const auto deadline = Clock::now() + 1s;
     while (Clock::now() < deadline && !raised) {
         rtsp::AacAccessUnit frame;
-        try { source.read(frame); } catch (const std::runtime_error&) { raised = true; }
+        try {
+            source.read(frame);
+        } catch (const std::runtime_error&) {
+            raised = true;
+        }
         std::this_thread::yield();
     }
     check(raised, "PCM starvation was not reported");
@@ -152,7 +171,9 @@ void audio_only_session(std::uint32_t timestamp_origin) {
         rtsp::net::OutboundMessage message;
         while (queue->try_pop(message)) {
             final_report = final_report || message.final_rtcp;
-            if (message.kind != rtsp::net::OutboundKind::Rtp) { continue; }
+            if (message.kind != rtsp::net::OutboundKind::Rtp) {
+                continue;
+            }
             rtsp::RtspStreamParser parser;
             parser.append(message.wire.data(), message.wire.size());
             rtsp::RtspStreamItem item;
@@ -183,5 +204,8 @@ int main() {
         audio_only_session(0xfffffc00u);
         std::cout << "PASS: startup, waiting, EOF, error draining, stop and pure audio RTP session\n";
         return 0;
-    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

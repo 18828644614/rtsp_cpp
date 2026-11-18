@@ -15,42 +15,64 @@ using Clock = std::chrono::steady_clock;
 using Result = rtsp::MicrophoneReadResult;
 
 void check(bool valid, const char* message) {
-    if (!valid) { throw std::runtime_error(message); }
+    if (!valid) {
+        throw std::runtime_error(message);
+    }
 }
 
 template <typename Action>
 void rejects(Action action) {
     bool rejected = false;
-    try { action(); } catch (const std::invalid_argument&) { rejected = true; }
+    try {
+        action();
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
     check(rejected, "invalid microphone configuration was accepted");
 }
 
 void configuration_tests() {
     rtsp::MicrophoneCapture capture;
     rtsp::MicrophoneConfig config;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.device_name = "__microphone_test_missing_device__";
     config.sample_rate = -1;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.sample_rate = 384001;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.sample_rate = 0;
     config.channels = -1;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.channels = 65;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.channels = 0;
     config.audio_buffer_ms = -1;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.audio_buffer_ms = 10001;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config.audio_buffer_ms = 0;
     rtsp::AudioFrame frame;
     frame.sample_rate = 123;
     check(capture.read(frame, std::chrono::milliseconds(0)) == Result::Failed
               && frame.sample_rate == 0 && !frame.buffer && !capture.last_error().empty(),
           "unopened read did not clear output and report an error");
-    rejects([&] { capture.read(frame, std::chrono::milliseconds(-1)); });
+    rejects([&] {
+        capture.read(frame, std::chrono::milliseconds(-1));
+    });
     capture.request_stop();
     check(capture.read(frame, std::chrono::milliseconds(1)) == Result::Stopped,
           "stop request was not observable");
@@ -59,14 +81,18 @@ void configuration_tests() {
     check(capture.format().sample_rate == 0, "close retained negotiated format");
     std::atomic<bool> cancelled{true};
     bool cancelled_open = false;
-    try { capture.open(config, &cancelled); }
-    catch (const std::runtime_error& error) {
+    try {
+        capture.open(config, &cancelled);
+    } catch (const std::runtime_error& error) {
         cancelled_open = std::string(error.what()) == "microphone open cancelled";
     }
     check(cancelled_open, "open overwrote an external stop request");
     bool missing = false;
-    try { capture.open(config); }
-    catch (const std::runtime_error&) { missing = true; }
+    try {
+        capture.open(config);
+    } catch (const std::runtime_error&) {
+        missing = true;
+    }
     check(missing && !capture.last_error().empty() && capture.format().sample_rate == 0,
           "missing microphone did not report a clean failure");
     capture.close();
@@ -123,8 +149,9 @@ void hardware_tests(const std::string& device) {
             return stopped_at;
         });
         Result result;
-        do { result = capture.read(next, std::chrono::seconds(5)); }
-        while (result == Result::FrameReady);
+        do {
+            result = capture.read(next, std::chrono::seconds(5));
+        } while (result == Result::FrameReady);
         const auto stopped_at = stopper.get();
         check(result == Result::Stopped && Clock::now() - stopped_at < std::chrono::seconds(1),
               "stop did not wake PCM reader within one second");
@@ -145,8 +172,9 @@ void hardware_tests(const std::string& device) {
     });
     rtsp::AudioFrame frame;
     Result result;
-    do { result = capture.read(frame, std::chrono::seconds(5)); }
-    while (result == Result::FrameReady);
+    do {
+        result = capture.read(frame, std::chrono::seconds(5));
+    } while (result == Result::FrameReady);
     stopper.get();
     check(result == Result::Stopped, "external stop request did not end read");
     capture.close();

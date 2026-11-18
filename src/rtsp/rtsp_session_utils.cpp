@@ -121,8 +121,7 @@ std::string make_tcp_transport(const TcpTransport& transport) {
         || transport.rtp_channel == transport.rtcp_channel) {
         throw std::runtime_error("invalid interleaved channels");
     }
-    return "RTP/AVP/TCP;unicast;interleaved=" + std::to_string(transport.rtp_channel)
-           + "-" + std::to_string(transport.rtcp_channel);
+    return "RTP/AVP/TCP;unicast;interleaved=" + std::to_string(transport.rtp_channel) + "-" + std::to_string(transport.rtcp_channel);
 }
 
 std::string session_id_from_header(const std::string& text) {
@@ -145,20 +144,26 @@ SessionHeader parse_session_header(const std::string& text) {
     }
     while (std::getline(input, part, ';')) {
         const auto equal = part.find('=');
-        if (lower(trim(part.substr(0, equal))) != "timeout") { continue; }
+        if (lower(trim(part.substr(0, equal))) != "timeout") {
+            continue;
+        }
         if (parsed.timeout_seconds || equal == std::string::npos) {
             throw std::runtime_error("invalid or duplicate Session timeout");
         }
         const auto value = trim(part.substr(equal + 1));
         unsigned int seconds = 0;
-        if (value.empty()) { throw std::runtime_error("empty Session timeout"); }
+        if (value.empty()) {
+            throw std::runtime_error("empty Session timeout");
+        }
         for (char c : value) {
             if (c < '0' || c > '9' || seconds > (2147483647U - (c - '0')) / 10) {
                 throw std::runtime_error("invalid Session timeout");
             }
             seconds = seconds * 10 + (c - '0');
         }
-        if (seconds == 0) { throw std::runtime_error("Session timeout must be positive"); }
+        if (seconds == 0) {
+            throw std::runtime_error("Session timeout must be positive");
+        }
         parsed.timeout_seconds = seconds;
     }
     return parsed;

@@ -10,8 +10,13 @@ public:
     explicit CaptureInput(MicrophoneConfig config) : config_(std::move(config)) {}
 
     AudioInputResult read(AudioFrame& frame, std::chrono::milliseconds timeout) override {
-        if (stopping_.load()) { return AudioInputResult::Ended; }
-        if (!opened_) { capture_.open(config_, &stopping_); opened_ = true; }
+        if (stopping_.load()) {
+            return AudioInputResult::Ended;
+        }
+        if (!opened_) {
+            capture_.open(config_, &stopping_);
+            opened_ = true;
+        }
         switch (capture_.read(frame, timeout)) {
         case MicrophoneReadResult::FrameReady: return AudioInputResult::FrameReady;
         case MicrophoneReadResult::Timeout: return AudioInputResult::Waiting;
@@ -21,8 +26,13 @@ public:
         throw std::logic_error("unknown microphone read result");
     }
 
-    void request_stop() noexcept override { stopping_.store(true); capture_.request_stop(); }
-    void close() noexcept override { capture_.close(); }
+    void request_stop() noexcept override {
+        stopping_.store(true);
+        capture_.request_stop();
+    }
+    void close() noexcept override {
+        capture_.close();
+    }
 
 private:
     const MicrophoneConfig config_;

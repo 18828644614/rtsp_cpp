@@ -62,8 +62,7 @@ void test_transport_and_urls() {
         "RTP/AVP/TCP;unicast;interleaved=0-1;interleaved=2-3",
         "RTP/AVP/TCP;unicast;unicast;interleaved=0-1",
         "RTP/AVP/TCP;unicast;interleaved=0-1;mode=record",
-        "RTP/AVP/TCP;unicast;interleaved=0-1,RTP/AVP;unicast"
-    };
+        "RTP/AVP/TCP;unicast;interleaved=0-1,RTP/AVP;unicast"};
     for (std::size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
         transport.rtp_channel = 10;
         transport.rtcp_channel = 11;
@@ -166,8 +165,7 @@ void test_complete_session() {
     response = respond(session, setup);
     check(response.status_code == 200 && response.header("Session") == "12345;timeout=60",
           "SETUP did not establish a Session");
-    check(response.header("Transport") == "RTP/AVP/TCP;unicast;interleaved=10-11"
-              && session.tracks()[0].transport.rtp_channel == 10, "SETUP did not negotiate channels");
+    check(response.header("Transport") == "RTP/AVP/TCP;unicast;interleaved=10-11" && session.tracks()[0].transport.rtp_channel == 10, "SETUP did not negotiate channels");
     check(session.state() == rtsp::SessionReady, "SETUP did not enter Ready");
     response = respond(session, request("PLAY", aggregate_url, "12345;timeout=60"));
     check(response.status_code == 200 && session.state() == rtsp::SessionPlaying,
@@ -182,10 +180,10 @@ void test_complete_session() {
 void test_multitrack_sdp_and_setup_order() {
     // 手工 SDP，音频在前，视频使用非默认 control。
     const std::string text = "v=0\r\na=control:*\r\n"
-        "m=audio 0 RTP/AVP 97\r\na=rtpmap:97 MPEG4-GENERIC/44100/1\r\n"
-        "a=fmtp:97 mode=AAC-hbr;config=1208;SizeLength=13;IndexLength=3;IndexDeltaLength=3\r\n"
-        "a=control:trackID=3\r\n"
-        "m=video 0 RTP/AVP 104\r\na=rtpmap:104 H264/90000\r\na=control:trackID=7\r\n";
+                             "m=audio 0 RTP/AVP 97\r\na=rtpmap:97 MPEG4-GENERIC/44100/1\r\n"
+                             "a=fmtp:97 mode=AAC-hbr;config=1208;SizeLength=13;IndexLength=3;IndexDeltaLength=3\r\n"
+                             "a=control:trackID=3\r\n"
+                             "m=video 0 RTP/AVP 104\r\na=rtpmap:104 H264/90000\r\na=control:trackID=7\r\n";
     const auto description = rtsp::parse_sdp(text);
     const auto roundtrip = rtsp::parse_sdp(rtsp::make_sdp(description));
     check(roundtrip.tracks.size() == 2 && roundtrip.tracks[0].channels == 1

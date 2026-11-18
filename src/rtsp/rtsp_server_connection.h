@@ -55,7 +55,11 @@ private:
     // | `Open` | 正常工作，可以接收请求、发送数据 |
     // | `Draining` | 正在收尾，停止接收请求，尽量发完已有数据 |
     // | `Closed` | Socket 已关闭 |
-    enum class State { Open, Draining, Closed };
+    enum class State {
+        Open,
+        Draining,
+        Closed
+    };
     void handle_item(const RtspStreamItem& item);
     void begin_drain(Clock::time_point now = Clock::now());
     void fail(const std::exception& error);

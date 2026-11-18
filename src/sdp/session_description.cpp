@@ -63,8 +63,7 @@ std::string make_h264_fmtp(const std::string& sps, const std::string& pps) {
         profile += digits[value >> 4];
         profile += digits[value & 15];
     }
-    return "packetization-mode=1;profile-level-id=" + profile
-           + ";sprop-parameter-sets=" + base64_encode(sps) + "," + base64_encode(pps);
+    return "packetization-mode=1;profile-level-id=" + profile + ";sprop-parameter-sets=" + base64_encode(sps) + "," + base64_encode(pps);
 }
 
 // 生成与解析共用检查，避免默认值掩盖缺失字段。

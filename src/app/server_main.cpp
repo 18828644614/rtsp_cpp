@@ -60,13 +60,17 @@ public:
             throw std::runtime_error("could not register console stop handler");
         }
     }
-    ~ConsoleScope() { ::SetConsoleCtrlHandler(on_console_control, FALSE); }
+    ~ConsoleScope() {
+        ::SetConsoleCtrlHandler(on_console_control, FALSE);
+    }
 };
 
 std::string utf8(const wchar_t* value) {
     const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
                                        nullptr, 0, nullptr, nullptr);
-    if (size <= 0) { throw std::invalid_argument("invalid Unicode argument"); }
+    if (size <= 0) {
+        throw std::invalid_argument("invalid Unicode argument");
+    }
     std::string result(static_cast<std::size_t>(size), '\0');
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value, -1,
                         result.data(), size, nullptr, nullptr);
@@ -79,7 +83,9 @@ std::string utf8(const wchar_t* value) {
 int wmain(int argc, wchar_t* argv[]) {
     try {
         std::vector<std::string> args;
-        for (int index = 1; index < argc; ++index) { args.push_back(utf8(argv[index])); }
+        for (int index = 1; index < argc; ++index) {
+            args.push_back(utf8(argv[index]));
+        }
         auto options = rtsp::app::parse_server_options(args);
         SetConsoleOutputCP(CP_UTF8);
         if (options.help) {
@@ -124,7 +130,9 @@ int wmain(int argc, wchar_t* argv[]) {
             std::cout << "Audio: AAC-LC 48000 Hz mono, " << source->track().fmtp << std::endl;
             auto audio_server = std::make_unique<rtsp::RtspServer>(options.address, options.port,
                 nullptr, std::move(source));
-            if (!console_stop.load()) { audio_server->run(&console_stop); }
+            if (!console_stop.load()) {
+                audio_server->run(&console_stop);
+            }
             return 0;
 #else
             throw std::invalid_argument("audio streaming requires ENABLE_AAC_ENCODING=ON");
@@ -187,10 +195,14 @@ int wmain(int argc, wchar_t* argv[]) {
             server = std::make_unique<rtsp::RtspServer>(options.address, options.port,
                                                        options.video_path, options.audio_path);
         }
-        if (!console_stop.load()) { server->run(&console_stop); }
+        if (!console_stop.load()) {
+            server->run(&console_stop);
+        }
         return 0;
     } catch (const std::exception& error) {
-        if (console_stop.load()) { return 0; }
+        if (console_stop.load()) {
+            return 0;
+        }
         std::cerr << "Server error: " << error.what() << '\n';
         return 1;
     }

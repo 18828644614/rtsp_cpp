@@ -6,10 +6,17 @@
 #include <iostream>
 
 namespace {
-void check(bool ok) { if (!ok) { throw std::runtime_error("server options mismatch"); } }
+void check(bool ok) {
+    if (!ok) {
+        throw std::runtime_error("server options mismatch");
+    }
+}
 void rejects(const std::vector<std::string>& args) {
-    try { rtsp::app::parse_server_options(args); }
-    catch (const std::invalid_argument&) { return; }
+    try {
+        rtsp::app::parse_server_options(args);
+    } catch (const std::invalid_argument&) {
+        return;
+    }
     throw std::runtime_error("accepted invalid server options");
 }
 
@@ -27,9 +34,12 @@ void unicode_file_paths() {
         rtsp::MediaSession media(video, audio);
         check(media.description().tracks.size() == 2);
     } catch (...) {
-        std::filesystem::remove(video_path); std::filesystem::remove(audio_path); throw;
+        std::filesystem::remove(video_path);
+        std::filesystem::remove(audio_path);
+        throw;
     }
-    std::filesystem::remove(video_path); std::filesystem::remove(audio_path);
+    std::filesystem::remove(video_path);
+    std::filesystem::remove(audio_path);
 }
 }
 
@@ -58,21 +68,14 @@ int main() {
               && options.fps == 25 && options.bitrate == 1000000 && options.gop == 50
               && options.pixel_format == "bgr24" && options.port == 9000);
         for (const auto& args : std::vector<std::vector<std::string>>{
-            {"--camera"}, {"--camera", "--fps", "30"}, {"--camera", "-1"}, {"--camera", "1x"},
-            {"--device", ""}, {"--camera", "0", "--device", "x"}, {"--fps", "30"},
-            {"--camera", "0", "--width", "641"}, {"--camera", "0", "--height", "0"},
-            {"--camera", "0", "--fps", "241"}, {"--camera", "0", "--bitrate", "2147483648"},
-            {"--camera", "0", "--gop", "0"}, {"--camera", "0", "--pixel-format", "mjpeg"},
-            {"--camera", "0", "--port", "0"}, {"--camera", "0", "--port", "999999999999999999"},
-            {"--camera", "0", "--camera", "1"}, {"--camera", "0", "sample.h264"},
-            {"8554", "127.0.0.1", "--camera", "0"}, {"--list-cameras", "--camera", "0"},
-            {"--microphone", "-1"}, {"--microphone"}, {"--microphone-device", ""},
-            {"--microphone", "0", "--camera", "0"}, {"--microphone", "0", "--microphone-device", "x"},
-            {"--synthetic-audio", "--microphone", "0"}, {"--synthetic-audio", "--fps", "30"},
-            {"--list-microphones", "--port", "9000"},
-            {"--not-an-option"}, {"1", "2", "3", "4", "5"}}) { rejects(args); }
+                 {"--camera"}, {"--camera", "--fps", "30"}, {"--camera", "-1"}, {"--camera", "1x"}, {"--device", ""}, {"--camera", "0", "--device", "x"}, {"--fps", "30"}, {"--camera", "0", "--width", "641"}, {"--camera", "0", "--height", "0"}, {"--camera", "0", "--fps", "241"}, {"--camera", "0", "--bitrate", "2147483648"}, {"--camera", "0", "--gop", "0"}, {"--camera", "0", "--pixel-format", "mjpeg"}, {"--camera", "0", "--port", "0"}, {"--camera", "0", "--port", "999999999999999999"}, {"--camera", "0", "--camera", "1"}, {"--camera", "0", "sample.h264"}, {"8554", "127.0.0.1", "--camera", "0"}, {"--list-cameras", "--camera", "0"}, {"--microphone", "-1"}, {"--microphone"}, {"--microphone-device", ""}, {"--microphone", "0", "--camera", "0"}, {"--microphone", "0", "--microphone-device", "x"}, {"--synthetic-audio", "--microphone", "0"}, {"--synthetic-audio", "--fps", "30"}, {"--list-microphones", "--port", "9000"}, {"--not-an-option"}, {"1", "2", "3", "4", "5"}}) {
+            rejects(args);
+        }
         unicode_file_paths();
         std::cout << "PASS: file compatibility, camera selection, Unicode and invalid options\n";
         return 0;
-    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }

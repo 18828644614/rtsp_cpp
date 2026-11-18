@@ -48,7 +48,9 @@ std::string make_rtcp_sender_report(std::uint32_t ssrc, std::uint64_t ntp,
     chunk += static_cast<char>(cname.size());
     chunk += cname;
     chunk += '\0';  // END item，补到 32 位边界。
-    while (chunk.size() % 4 != 0) { chunk += '\0'; }
+    while (chunk.size() % 4 != 0) {
+        chunk += '\0';
+    }
     out.append("\x81\xca", 2);
     const auto length = chunk.size() / 4;
     out += static_cast<char>(length >> 8);

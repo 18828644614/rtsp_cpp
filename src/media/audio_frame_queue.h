@@ -14,7 +14,11 @@ struct AudioFrameQueueLimits {
     std::size_t max_bytes = 128 * 1024;
 };
 
-enum class AudioFrameRead { FrameReady, Waiting, Ended };
+enum class AudioFrameRead {
+    FrameReady,
+    Waiting,
+    Ended
+};
 
 struct AudioFrameQueueStats {
     std::size_t frames = 0;

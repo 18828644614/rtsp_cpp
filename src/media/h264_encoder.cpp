@@ -44,8 +44,13 @@ void validate(const H264EncoderConfig& config) {
 std::size_t start_code(const std::uint8_t* data, std::size_t size,
                        std::size_t begin, std::size_t& prefix) {
     for (auto offset = begin; offset + 2 < size; ++offset) {
-        if (data[offset] != 0 || data[offset + 1] != 0) { continue; }
-        if (data[offset + 2] == 1) { prefix = 3; return offset; }
+        if (data[offset] != 0 || data[offset + 1] != 0) {
+            continue;
+        }
+        if (data[offset + 2] == 1) {
+            prefix = 3;
+            return offset;
+        }
         if (offset + 3 < size && data[offset + 2] == 0 && data[offset + 3] == 1) {
             prefix = 4;
             return offset;
@@ -57,12 +62,16 @@ std::size_t start_code(const std::uint8_t* data, std::size_t size,
 
 // 首版限定 libx264 的 Annex-B 输出：一个编码包必须恰好对应一个带 AUD 的图像 AU。
 H264AccessUnit parse_packet(const AVPacket& packet) {
-    if (!packet.data || packet.size <= 0) { throw std::runtime_error("empty H264 encoder packet"); }
+    if (!packet.data || packet.size <= 0) {
+        throw std::runtime_error("empty H264 encoder packet");
+    }
     const auto size = static_cast<std::size_t>(packet.size);
     std::size_t prefix = 0;
     auto position = start_code(packet.data, size, 0, prefix);
     if (position == size || std::any_of(packet.data, packet.data + position,
-        [](std::uint8_t value) { return value != 0; })) {
+                                        [](std::uint8_t value) {
+                                            return value != 0;
+                                        })) {
         throw std::runtime_error("encoder did not produce Annex-B H264");
     }
     H264AccessUnit unit;
@@ -72,8 +81,12 @@ H264AccessUnit parse_packet(const AVPacket& packet) {
         std::size_t next_prefix = 0;
         const auto next = start_code(packet.data, size, begin, next_prefix);
         auto end = next;
-        while (end > begin && packet.data[end - 1] == 0) { --end; }
-        if (end == begin) { throw std::runtime_error("empty encoder NALU"); }
+        while (end > begin && packet.data[end - 1] == 0) {
+            --end;
+        }
+        if (end == begin) {
+            throw std::runtime_error("empty encoder NALU");
+        }
         const unsigned int header = packet.data[begin];
         const auto type = header & 0x1f;
         if ((header & 0x80) || type == 0 || type > 23) {
@@ -88,7 +101,9 @@ H264AccessUnit parse_packet(const AVPacket& packet) {
         position = next;
         prefix = next_prefix;
     }
-    if (!has_picture) { throw std::runtime_error("encoder access unit has no picture"); }
+    if (!has_picture) {
+        throw std::runtime_error("encoder access unit has no picture");
+    }
     return unit;
 }
 
@@ -118,7 +133,9 @@ struct H264Encoder::Impl {
     bool flushed = false;
     bool failed = false;
 
-    ~Impl() { release(); }
+    ~Impl() {
+        release();
+    }
 
     void release() noexcept {
         av_packet_free(&packet);
@@ -140,8 +157,12 @@ struct H264Encoder::Impl {
     }
 
     void require_open() const {
-        if (!codec) { throw std::logic_error("H264 encoder is not open"); }
-        if (failed) { throw std::logic_error("H264 encoder failed; reopen it before use"); }
+        if (!codec) {
+            throw std::logic_error("H264 encoder is not open");
+        }
+        if (failed) {
+            throw std::logic_error("H264 encoder failed; reopen it before use");
+        }
     }
 
     // 为当前输入图像计算显示时间戳 pts 和持续时间 duration，统一换算到 90 kHz 时间基，并检查时间是否有效。
@@ -198,8 +219,14 @@ struct H264Encoder::Impl {
         bool has_pps = false;
         for (const auto& nalu : unit.nalus) {
             const auto type = static_cast<unsigned char>(nalu[0]) & 0x1f;
-            if (type == 7) { sps = nalu; has_sps = true; }
-            if (type == 8) { pps = nalu; has_pps = true; }
+            if (type == 7) {
+                sps = nalu;
+                has_sps = true;
+            }
+            if (type == 8) {
+                pps = nalu;
+                has_pps = true;
+            }
         }
         if (sps.size() < 4 || pps.empty()) {
             throw std::runtime_error("encoder produced a picture before valid SPS/PPS");
@@ -208,7 +235,9 @@ struct H264Encoder::Impl {
             std::vector<std::string> nalus{unit.nalus.front(), sps, pps};
             for (std::size_t index = 1; index < unit.nalus.size(); ++index) {
                 const auto type = static_cast<unsigned char>(unit.nalus[index][0]) & 0x1f;
-                if (type != 7 && type != 8) { nalus.push_back(std::move(unit.nalus[index])); }
+                if (type != 7 && type != 8) {
+                    nalus.push_back(std::move(unit.nalus[index]));
+                }
             }
             unit.nalus = std::move(nalus);
         }
@@ -218,8 +247,12 @@ struct H264Encoder::Impl {
     bool receive(std::vector<H264AccessUnit>& output) {
         for (;;) {
             const int result = avcodec_receive_packet(codec, packet);
-            if (result == AVERROR(EAGAIN)) { return false; }
-            if (result == AVERROR_EOF) { return true; }
+            if (result == AVERROR(EAGAIN)) {
+                return false;
+            }
+            if (result == AVERROR_EOF) {
+                return true;
+            }
             require_success(result, "receive H264 packet");
             try {
                 const auto found = pending.find(packet->pts);
@@ -251,7 +284,9 @@ void H264Encoder::open(const H264EncoderConfig& config) {
     // 根据名称查找编码器。
     // AVCodec 描述的是 这是什么编码器、有什么能力
     const AVCodec* encoder = avcodec_find_encoder_by_name("libx264");
-    if (!encoder) { throw std::runtime_error("FFmpeg SDK requires the libx264 H264 encoder"); }
+    if (!encoder) {
+        throw std::runtime_error("FFmpeg SDK requires the libx264 H264 encoder");
+    }
 
     // 创建本次编码任务的内部状态
     auto state = std::make_unique<Impl>();
@@ -266,7 +301,9 @@ void H264Encoder::open(const H264EncoderConfig& config) {
     // AVCodecContext
     //     当前这一次编码任务的配置和运行状态
     state->codec = avcodec_alloc_context3(encoder);
-    if (!state->codec) { throw std::bad_alloc(); }
+    if (!state->codec) {
+        throw std::bad_alloc();
+    }
     auto* codec = state->codec;
 
     codec->width = config.width;
@@ -302,7 +339,9 @@ void H264Encoder::open(const H264EncoderConfig& config) {
 
         // avcodec_open2() 会把未识别的字典选项留在字典中。
         // 如果有剩余，通常意味着传入的选项名称不被支持，不能假定配置已经全部生效。这里检查的是顶层字典选项是否被接收，不等于逐项验证所有 x264 内部行为。
-        if (av_dict_count(options)) { throw std::runtime_error("unused H264 encoder options"); }
+        if (av_dict_count(options)) {
+            throw std::runtime_error("unused H264 encoder options");
+        }
         av_dict_free(&options);
     } catch (...) {
         av_dict_free(&options);
@@ -321,7 +360,9 @@ void H264Encoder::open(const H264EncoderConfig& config) {
     //     包括数据地址、大小、PTS、DTS。
     state->converted = av_frame_alloc();
     state->packet = av_packet_alloc();
-    if (!state->converter || !state->converted || !state->packet) { throw std::bad_alloc(); }
+    if (!state->converter || !state->converted || !state->packet) {
+        throw std::bad_alloc();
+    }
 
     // 明确设置转换器使用的颜色规则:
     // 根据配置准备好编码器、像素转换器和缓冲区，让后面的 encode() 可以开始接收原始图像
@@ -343,7 +384,9 @@ void H264Encoder::open(const H264EncoderConfig& config) {
 std::vector<H264AccessUnit> H264Encoder::encode(const CameraFrame& frame) {
     // 检查编码器是否处于可接收输入的状态
     impl_->require_open();
-    if (impl_->flushed) { throw std::logic_error("cannot encode after flush; reopen encoder"); }
+    if (impl_->flushed) {
+        throw std::logic_error("cannot encode after flush; reopen encoder");
+    }
 
     // 取得原始图像，检查尺寸、格式和行跨度
     const auto& config = impl_->config;
@@ -373,7 +416,9 @@ std::vector<H264AccessUnit> H264Encoder::encode(const CameraFrame& frame) {
         require_success(av_frame_make_writable(impl_->converted), "make encoder frame writable");
         const int rows = sws_scale(impl_->converter, input->data, input->linesize,
             0, config.height, impl_->converted->data, impl_->converted->linesize);
-        if (rows != config.height) { throw std::runtime_error("incomplete encoder pixel conversion"); }
+        if (rows != config.height) {
+            throw std::runtime_error("incomplete encoder pixel conversion");
+        }
 
         impl_->converted->pts = timing.pts;
         impl_->converted->duration = timing.duration;
@@ -394,7 +439,9 @@ std::vector<H264AccessUnit> H264Encoder::encode(const CameraFrame& frame) {
                 impl_->source_time_base = {frame.time_base_num, frame.time_base_den};
             }
         }
-        if (impl_->mode == EncoderTimestampMode::FrameRate || !frame.source_pts) { ++impl_->fallbacks; }
+        if (impl_->mode == EncoderTimestampMode::FrameRate || !frame.source_pts) {
+            ++impl_->fallbacks;
+        }
         impl_->last_pts = timing.pts;
         ++impl_->submitted;
         impl_->receive(output);
@@ -428,10 +475,19 @@ std::vector<H264AccessUnit> H264Encoder::flush() {
     return output;
 }
 
-void H264Encoder::close() noexcept { impl_->release(); }
-const std::string& H264Encoder::sps() const { return impl_->sps; }
-const std::string& H264Encoder::pps() const { return impl_->pps; }
-EncoderTimestampMode H264Encoder::timestamp_mode() const { return impl_->mode; }
-std::uint64_t H264Encoder::timestamp_fallbacks() const { return impl_->fallbacks; }
-
+void H264Encoder::close() noexcept {
+    impl_->release();
+}
+const std::string& H264Encoder::sps() const {
+    return impl_->sps;
+}
+const std::string& H264Encoder::pps() const {
+    return impl_->pps;
+}
+EncoderTimestampMode H264Encoder::timestamp_mode() const {
+    return impl_->mode;
+}
+std::uint64_t H264Encoder::timestamp_fallbacks() const {
+    return impl_->fallbacks;
+}
 }

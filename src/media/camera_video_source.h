@@ -14,7 +14,11 @@
 
 namespace rtsp {
 
-enum class CameraInputResult { FrameReady, Waiting, Ended };
+enum class CameraInputResult {
+    FrameReady,
+    Waiting,
+    Ended
+};
 
 // 工作线程调用 read/close，拥有者线程可并发 request_stop。
 // 实现必须遵守读取期限，request_stop 必须唤醒等待；不可恢复错误用异常报告。
@@ -46,7 +50,9 @@ public:
     bool read(H264AccessUnit& frame) override;
     bool ended() const override;
     const MediaTrack& track() const override;
-    bool is_live() const override { return true; }
+    bool is_live() const override {
+        return true;
+    }
     void resume() override;
     void stop() override;
     VideoFrameQueueStats queue_stats() const;

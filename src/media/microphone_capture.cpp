@@ -62,7 +62,9 @@ public:
         }
     }
     ~ComScope() {
-        if (SUCCEEDED(result_)) { CoUninitialize(); }
+        if (SUCCEEDED(result_)) {
+            CoUninitialize();
+        }
     }
 private:
     HRESULT result_;
@@ -116,7 +118,9 @@ struct MicrophoneCapture::Impl {
             return fail("microphone PCM format changed or frame is invalid");
         }
         AVFrame* retained = av_frame_clone(decoded);
-        if (!retained) { throw std::bad_alloc(); }
+        if (!retained) {
+            throw std::bad_alloc();
+        }
         frame.buffer = std::shared_ptr<AVFrame>(retained, [](AVFrame* owned) {
             av_frame_free(&owned);
         });
@@ -126,7 +130,9 @@ struct MicrophoneCapture::Impl {
         frame.sample_format = actual.sample_format;
         frame.nb_samples = decoded->nb_samples;
         const auto pts = decoded->pts != AV_NOPTS_VALUE ? decoded->pts : decoded->best_effort_timestamp;
-        if (pts != AV_NOPTS_VALUE) { frame.source_pts = pts; }
+        if (pts != AV_NOPTS_VALUE) {
+            frame.source_pts = pts;
+        }
         const auto time_base = decoded->time_base.num > 0 && decoded->time_base.den > 0
             ? decoded->time_base : AVRational{actual.time_base_num, actual.time_base_den};
         frame.time_base_num = time_base.num;
@@ -138,9 +144,13 @@ struct MicrophoneCapture::Impl {
 };
 
 MicrophoneCapture::MicrophoneCapture() : impl_(std::make_unique<Impl>()) {}
-MicrophoneCapture::~MicrophoneCapture() { close(); }
+MicrophoneCapture::~MicrophoneCapture() {
+    close();
+}
 
-std::string MicrophoneCapture::ffmpeg_version() { return av_version_info(); }
+std::string MicrophoneCapture::ffmpeg_version() {
+    return av_version_info();
+}
 
 std::vector<MicrophoneDeviceInfo> MicrophoneCapture::enumerate_devices() {
     ComScope scope;
@@ -162,7 +172,9 @@ std::vector<MicrophoneDeviceInfo> MicrophoneCapture::enumerate_devices() {
     while ((next = monikers->Next(1, moniker.ReleaseAndGetAddressOf(), nullptr)) == S_OK) {
         ComPtr<IPropertyBag> properties;
         if (FAILED(moniker->BindToStorage(nullptr, nullptr,
-            IID_PPV_ARGS(properties.GetAddressOf())))) { continue; }
+                                          IID_PPV_ARGS(properties.GetAddressOf())))) {
+            continue;
+        }
         VARIANT friendly;
         VariantInit(&friendly);
         const HRESULT named = properties->Read(L"FriendlyName", &friendly, nullptr);
@@ -176,19 +188,27 @@ std::vector<MicrophoneDeviceInfo> MicrophoneCapture::enumerate_devices() {
             throw;
         }
         VariantClear(&friendly);
-        if (description.empty()) { continue; }
+        if (description.empty()) {
+            continue;
+        }
         LPOLESTR display_name = nullptr;
         const HRESULT displayed = moniker->GetDisplayName(nullptr, nullptr, &display_name);
         std::string name = description;
         if (SUCCEEDED(displayed) && display_name) {
-            try { name = utf8(display_name, static_cast<int>(wcslen(display_name))); }
-            catch (...) { CoTaskMemFree(display_name); throw; }
+            try {
+                name = utf8(display_name, static_cast<int>(wcslen(display_name)));
+            } catch (...) {
+                CoTaskMemFree(display_name);
+                throw;
+            }
             CoTaskMemFree(display_name);
             std::replace(name.begin(), name.end(), ':', '_');
         }
         devices.push_back({name, description});
     }
-    if (FAILED(next)) { throw std::runtime_error("DirectShow device enumeration failed"); }
+    if (FAILED(next)) {
+        throw std::runtime_error("DirectShow device enumeration failed");
+    }
     return devices;
 }
 
@@ -202,10 +222,14 @@ void MicrophoneCapture::open(const MicrophoneConfig& config, const std::atomic<b
     impl_->sequence = 0;
     AVDictionary* options = nullptr;
     try {
-        if (impl_->stopped()) { throw std::runtime_error("microphone open cancelled"); }
+        if (impl_->stopped()) {
+            throw std::runtime_error("microphone open cancelled");
+        }
         avdevice_register_all();
         const AVInputFormat* device = av_find_input_format("dshow");
-        if (!device) { throw std::runtime_error("FFmpeg was built without DirectShow input"); }
+        if (!device) {
+            throw std::runtime_error("FFmpeg was built without DirectShow input");
+        }
         // 0 表示设备默认值，不传对应选项；本阶段不做重采样或声道转换。
         if (config.sample_rate) {
             require_success(av_dict_set_int(&options, "sample_rate", config.sample_rate, 0), "sample_rate");
@@ -218,13 +242,19 @@ void MicrophoneCapture::open(const MicrophoneConfig& config, const std::atomic<b
                             "audio_buffer_size");
         }
         impl_->input = avformat_alloc_context();
-        if (!impl_->input) { throw std::bad_alloc(); }
+        if (!impl_->input) {
+            throw std::bad_alloc();
+        }
         impl_->input->flags |= AVFMT_FLAG_NONBLOCK;
         impl_->input->interrupt_callback = {Impl::interrupted, impl_.get()};
         require_success(avformat_open_input(&impl_->input,
             ("audio=" + config.device_name).c_str(), device, &options), "open microphone");
-        if (impl_->stopped()) { throw std::runtime_error("microphone open cancelled"); }
-        if (av_dict_count(options) != 0) { throw std::runtime_error("unconsumed microphone options"); }
+        if (impl_->stopped()) {
+            throw std::runtime_error("microphone open cancelled");
+        }
+        if (av_dict_count(options) != 0) {
+            throw std::runtime_error("unconsumed microphone options");
+        }
         av_dict_free(&options);
         for (unsigned int index = 0; index < impl_->input->nb_streams; ++index) {
             if (impl_->input->streams[index]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
@@ -232,15 +262,23 @@ void MicrophoneCapture::open(const MicrophoneConfig& config, const std::atomic<b
                 break;
             }
         }
-        if (impl_->stream_index < 0) { throw std::runtime_error("microphone has no audio stream"); }
+        if (impl_->stream_index < 0) {
+            throw std::runtime_error("microphone has no audio stream");
+        }
         const AVStream* stream = impl_->input->streams[impl_->stream_index];
         const AVCodecParameters* parameters = stream->codecpar;
         const std::string codec_name = avcodec_get_name(parameters->codec_id);
-        if (codec_name.rfind("pcm_", 0) != 0) { throw std::runtime_error("microphone requires PCM input"); }
+        if (codec_name.rfind("pcm_", 0) != 0) {
+            throw std::runtime_error("microphone requires PCM input");
+        }
         const AVCodec* codec = avcodec_find_decoder(parameters->codec_id);
-        if (!codec) { throw std::runtime_error("microphone PCM decoder unavailable"); }
+        if (!codec) {
+            throw std::runtime_error("microphone PCM decoder unavailable");
+        }
         impl_->decoder = avcodec_alloc_context3(codec);
-        if (!impl_->decoder) { throw std::bad_alloc(); }
+        if (!impl_->decoder) {
+            throw std::bad_alloc();
+        }
         require_success(avcodec_parameters_to_context(impl_->decoder, parameters), "PCM parameters");
         impl_->decoder->pkt_timebase = stream->time_base;
         require_success(avcodec_open2(impl_->decoder, codec, nullptr), "open PCM decoder");
@@ -261,7 +299,9 @@ void MicrophoneCapture::open(const MicrophoneConfig& config, const std::atomic<b
                         layout, codec_name, stream->time_base.num, stream->time_base.den};
         impl_->packet = av_packet_alloc();
         impl_->decoded = av_frame_alloc();
-        if (!impl_->packet || !impl_->decoded) { throw std::bad_alloc(); }
+        if (!impl_->packet || !impl_->decoded) {
+            throw std::bad_alloc();
+        }
     } catch (const std::exception& error) {
         impl_->error = error.what();
         impl_->failed = true;
@@ -273,17 +313,29 @@ void MicrophoneCapture::open(const MicrophoneConfig& config, const std::atomic<b
 
 MicrophoneReadResult MicrophoneCapture::read(AudioFrame& frame, std::chrono::milliseconds timeout) {
     frame = {};
-    if (timeout.count() < 0) { throw std::invalid_argument("negative microphone read timeout"); }
-    if (impl_->stopped()) { return MicrophoneReadResult::Stopped; }
-    if (impl_->failed) { return MicrophoneReadResult::Failed; }
-    if (!impl_->input) { return impl_->fail("microphone is not open"); }
+    if (timeout.count() < 0) {
+        throw std::invalid_argument("negative microphone read timeout");
+    }
+    if (impl_->stopped()) {
+        return MicrophoneReadResult::Stopped;
+    }
+    if (impl_->failed) {
+        return MicrophoneReadResult::Failed;
+    }
+    if (!impl_->input) {
+        return impl_->fail("microphone is not open");
+    }
     const auto deadline = Clock::now() + timeout;
     bool attempted_read = false;
     for (;;) {
-        if (impl_->stopped()) { return MicrophoneReadResult::Stopped; }
+        if (impl_->stopped()) {
+            return MicrophoneReadResult::Stopped;
+        }
         // 先取解码输出，保留尚未被解码器接收的包，避免 EAGAIN 时丢包。
         const int received = avcodec_receive_frame(impl_->decoder, impl_->decoded);
-        if (received == 0) { return impl_->deliver(frame); }
+        if (received == 0) {
+            return impl_->deliver(frame);
+        }
         if (received != AVERROR(EAGAIN)) {
             return impl_->fail("receive microphone PCM: " + error_text(received));
         }
@@ -295,11 +347,15 @@ MicrophoneReadResult MicrophoneCapture::read(AudioFrame& frame, std::chrono::mil
             }
             av_packet_unref(impl_->packet);
             impl_->packet_pending = false;
-            if (sent < 0) { return impl_->fail("decode microphone PCM: " + error_text(sent)); }
+            if (sent < 0) {
+                return impl_->fail("decode microphone PCM: " + error_text(sent));
+            }
             continue;
         }
         // 零超时也尝试读取一次；连续无输出时仍遵守本次读取截止时间。
-        if (attempted_read && Clock::now() >= deadline) { return MicrophoneReadResult::Timeout; }
+        if (attempted_read && Clock::now() >= deadline) {
+            return MicrophoneReadResult::Timeout;
+        }
         attempted_read = true;
         const int result = av_read_frame(impl_->input, impl_->packet);
         if (impl_->stopped()) {
@@ -307,10 +363,14 @@ MicrophoneReadResult MicrophoneCapture::read(AudioFrame& frame, std::chrono::mil
             return MicrophoneReadResult::Stopped;
         }
         if (result == AVERROR(EAGAIN)) {
-            if (Clock::now() >= deadline) { return MicrophoneReadResult::Timeout; }
+            if (Clock::now() >= deadline) {
+                return MicrophoneReadResult::Timeout;
+            }
             std::unique_lock<std::mutex> lock(impl_->wait_mutex);
             impl_->wake.wait_until(lock, std::min(deadline, Clock::now() + std::chrono::milliseconds(5)),
-                [this] { return impl_->stopped(); });
+                                   [this] {
+                                       return impl_->stopped();
+                                   });
         } else if (result < 0) {
             return impl_->fail("read microphone (device lost or input failed): " + error_text(result));
         } else if (impl_->packet->stream_index == impl_->stream_index) {
@@ -340,7 +400,11 @@ void MicrophoneCapture::close() {
     impl_->actual = {};
 }
 
-const MicrophoneFormat& MicrophoneCapture::format() const { return impl_->actual; }
-const std::string& MicrophoneCapture::last_error() const { return impl_->error; }
+const MicrophoneFormat& MicrophoneCapture::format() const {
+    return impl_->actual;
+}
+const std::string& MicrophoneCapture::last_error() const {
+    return impl_->error;
+}
 
 }  // namespace rtsp

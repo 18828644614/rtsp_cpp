@@ -30,13 +30,17 @@ public:
             throw std::runtime_error("could not register console stop handler");
         }
     }
-    ~ConsoleScope() { SetConsoleCtrlHandler(on_console_control, FALSE); }
+    ~ConsoleScope() {
+        SetConsoleCtrlHandler(on_console_control, FALSE);
+    }
 };
 
 std::string utf8(const wchar_t* text) {
     const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
         text, -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) { throw std::invalid_argument("invalid Unicode argument"); }
+    if (size <= 0) {
+        throw std::invalid_argument("invalid Unicode argument");
+    }
     std::string result(static_cast<std::size_t>(size), '\0');
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
         text, -1, result.data(), size, nullptr, nullptr);
@@ -45,7 +49,9 @@ std::string utf8(const wchar_t* text) {
 }
 
 int number(const std::string& text, int minimum, int maximum, const std::string& option) {
-    if (text.empty()) { throw std::invalid_argument("missing number for " + option); }
+    if (text.empty()) {
+        throw std::invalid_argument("missing number for " + option);
+    }
     int value = 0;
     for (char digit : text) {
         if (digit < '0' || digit > '9' || value > (maximum - (digit - '0')) / 10) {
@@ -78,8 +84,11 @@ void print_frame(const rtsp::AudioFrame& frame) {
     std::cout << "[pcm] n=" << frame.sequence << " samples=" << frame.nb_samples
               << " rate=" << frame.sample_rate << " channels=" << frame.channels
               << " fmt=" << frame.sample_format << " source_pts=";
-    if (frame.source_pts) { std::cout << *frame.source_pts; }
-    else { std::cout << "missing"; }
+    if (frame.source_pts) {
+        std::cout << *frame.source_pts;
+    } else {
+        std::cout << "missing";
+    }
     std::cout << " time_base=" << frame.time_base_num << '/' << frame.time_base_den
               << " arrival_steady_us=" << frame.arrival_steady_us << std::endl;
 }
@@ -98,25 +107,43 @@ Options parse_options(int argc, wchar_t* argv[]) {
     Options options;
     for (int index = 1; index < argc; ++index) {
         const std::string option = utf8(argv[index]);
-        if (option == "--list") { options.list = true; continue; }
-        if (option == "--quiet") { options.quiet = true; continue; }
+        if (option == "--list") {
+            options.list = true;
+            continue;
+        }
+        if (option == "--quiet") {
+            options.quiet = true;
+            continue;
+        }
         if (option != "--device" && option != "--device-index" && option != "--sample-rate"
             && option != "--channels" && option != "--buffer-ms" && option != "--seconds"
             && option != "--timeout-ms" && option != "--repeat") {
             throw std::invalid_argument("unknown option: " + option);
         }
-        if (++index == argc) { throw std::invalid_argument("missing value for " + option); }
+        if (++index == argc) {
+            throw std::invalid_argument("missing value for " + option);
+        }
         const std::string value = utf8(argv[index]);
         if (option == "--device") {
-            if (value.empty()) { throw std::invalid_argument("empty microphone device name"); }
+            if (value.empty()) {
+                throw std::invalid_argument("empty microphone device name");
+            }
             options.config.device_name = value;
-        } else if (option == "--device-index") { options.device_index = number(value, 0, 10000, option); }
-        else if (option == "--sample-rate") { options.config.sample_rate = number(value, 0, 384000, option); }
-        else if (option == "--channels") { options.config.channels = number(value, 0, 64, option); }
-        else if (option == "--buffer-ms") { options.config.audio_buffer_ms = number(value, 0, 10000, option); }
-        else if (option == "--seconds") { options.seconds = number(value, 0, 86400, option); }
-        else if (option == "--timeout-ms") { options.timeout_ms = number(value, 1, 600000, option); }
-        else if (option == "--repeat") { options.repeat = number(value, 1, 1000, option); }
+        } else if (option == "--device-index") {
+            options.device_index = number(value, 0, 10000, option);
+        } else if (option == "--sample-rate") {
+            options.config.sample_rate = number(value, 0, 384000, option);
+        } else if (option == "--channels") {
+            options.config.channels = number(value, 0, 64, option);
+        } else if (option == "--buffer-ms") {
+            options.config.audio_buffer_ms = number(value, 0, 10000, option);
+        } else if (option == "--seconds") {
+            options.seconds = number(value, 0, 86400, option);
+        } else if (option == "--timeout-ms") {
+            options.timeout_ms = number(value, 1, 600000, option);
+        } else if (option == "--repeat") {
+            options.repeat = number(value, 1, 1000, option);
+        }
     }
     if (options.device_index >= 0 && !options.config.device_name.empty()) {
         throw std::invalid_argument("--device and --device-index are mutually exclusive");
@@ -131,7 +158,9 @@ bool capture_once(const Options& options, int run) {
     try {
         capture.open(options.config, &console_stop);
     } catch (const std::exception&) {
-        if (console_stop.load()) { return true; }
+        if (console_stop.load()) {
+            return true;
+        }
         throw;
     }
     const auto& format = capture.format();
@@ -148,7 +177,9 @@ bool capture_once(const Options& options, int run) {
     std::string reason = "duration";
     while (!console_stop.load()) {
         const auto before_read = std::chrono::steady_clock::now();
-        if (options.seconds && before_read - capture_start >= std::chrono::seconds(options.seconds)) { break; }
+        if (options.seconds && before_read - capture_start >= std::chrono::seconds(options.seconds)) {
+            break;
+        }
         const auto no_data_deadline = last_frame + std::chrono::milliseconds(options.timeout_ms);
         if (before_read >= no_data_deadline) {
             std::cerr << "Microphone error: no PCM within " << options.timeout_ms << " ms\n";
@@ -157,18 +188,25 @@ bool capture_once(const Options& options, int run) {
             break;
         }
         auto deadline = std::min(before_read + std::chrono::milliseconds(50), no_data_deadline);
-        if (options.seconds) { deadline = std::min(deadline, capture_start + std::chrono::seconds(options.seconds)); }
+        if (options.seconds) {
+            deadline = std::min(deadline, capture_start + std::chrono::seconds(options.seconds));
+        }
         const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - before_read);
         rtsp::AudioFrame frame;
         const auto result = capture.read(frame, wait);
-        if (result == rtsp::MicrophoneReadResult::Stopped) { reason = "stopped"; break; }
+        if (result == rtsp::MicrophoneReadResult::Stopped) {
+            reason = "stopped";
+            break;
+        }
         if (result == rtsp::MicrophoneReadResult::Failed) {
             std::cerr << "Microphone error: " << capture.last_error() << '\n';
             reason = "failed";
             failed = true;
             break;
         }
-        if (result == rtsp::MicrophoneReadResult::Timeout) { continue; }
+        if (result == rtsp::MicrophoneReadResult::Timeout) {
+            continue;
+        }
         last_frame = std::chrono::steady_clock::now();
         ++frames;
         samples += static_cast<std::uint64_t>(frame.nb_samples);
@@ -178,7 +216,9 @@ bool capture_once(const Options& options, int run) {
             next_log = last_frame + std::chrono::seconds(1);
         }
     }
-    if (console_stop.load()) { reason = "stopped"; }
+    if (console_stop.load()) {
+        reason = "stopped";
+    }
     if (!failed && frames == 0 && reason != "stopped") {
         std::cerr << "Microphone error: capture ended without PCM\n";
         failed = true;
@@ -203,7 +243,10 @@ bool capture_once(const Options& options, int run) {
 int wmain(int argc, wchar_t* argv[]) {
     try {
         for (int index = 1; index < argc; ++index) {
-            if (utf8(argv[index]) == "--help") { usage(); return 0; }
+            if (utf8(argv[index]) == "--help") {
+                usage();
+                return 0;
+            }
         }
         auto options = parse_options(argc, argv);
         if (options.list || options.config.device_name.empty()) {
@@ -214,17 +257,25 @@ int wmain(int argc, wchar_t* argv[]) {
                     std::cout << '[' << index << "] " << devices[index].description
                               << "\n  " << devices[index].name << '\n';
                 }
-                if (devices.empty()) { std::cout << "No microphone devices found.\n"; }
+                if (devices.empty()) {
+                    std::cout << "No microphone devices found.\n";
+                }
                 return 0;
             }
-            if (devices.empty()) { throw std::runtime_error("no microphone devices found; use --list"); }
+            if (devices.empty()) {
+                throw std::runtime_error("no microphone devices found; use --list");
+            }
             const auto index = static_cast<std::size_t>(options.device_index < 0 ? 0 : options.device_index);
-            if (index >= devices.size()) { throw std::invalid_argument("microphone index out of range; use --list"); }
+            if (index >= devices.size()) {
+                throw std::invalid_argument("microphone index out of range; use --list");
+            }
             options.config.device_name = devices[index].name;
         }
         ConsoleScope console;
         for (int run = 1; run <= options.repeat && !console_stop.load(); ++run) {
-            if (!capture_once(options, run)) { return 1; }
+            if (!capture_once(options, run)) {
+                return 1;
+            }
         }
         return 0;
     } catch (const std::exception& error) {

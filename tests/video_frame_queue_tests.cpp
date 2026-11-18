@@ -7,7 +7,9 @@
 
 namespace {
 void check(bool ok, const char* message) {
-    if (!ok) { throw std::runtime_error(message); }
+    if (!ok) {
+        throw std::runtime_error(message);
+    }
 }
 rtsp::H264AccessUnit frame(std::int64_t pts, bool key = false, std::size_t bytes = 4) {
     return {{std::string(bytes, key ? '\x65' : '\x41')}, key, pts, 3000};
@@ -35,8 +37,10 @@ void test_limits_and_recovery() {
 }
 void test_resume_and_terminal_states() {
     rtsp::VideoFrameQueue queue({10, 100});
-    queue.push(frame(0, true)); queue.push(frame(1));
-    queue.push(frame(2, true)); queue.push(frame(3));
+    queue.push(frame(0, true));
+    queue.push(frame(1));
+    queue.push(frame(2, true));
+    queue.push(frame(3));
     queue.resume_at_latest_idr();
     rtsp::H264AccessUnit out;
     check(queue.stats().frames == 2 && queue.read(out) == rtsp::VideoFrameRead::FrameReady
@@ -54,7 +58,11 @@ void test_resume_and_terminal_states() {
     failed.finish(std::make_exception_ptr(std::runtime_error("device lost")));
     check(failed.read(out) == rtsp::VideoFrameRead::FrameReady, "failure lost valid buffered frame");
     bool raised = false;
-    try { failed.read(out); } catch (const std::runtime_error& e) { raised = std::string(e.what()) == "device lost"; }
+    try {
+        failed.read(out);
+    } catch (const std::runtime_error& e) {
+        raised = std::string(e.what()) == "device lost";
+    }
     check(raised && out.nalus.empty(), "producer error not propagated");
     failed.discard_and_finish();
     check(failed.read(out) == rtsp::VideoFrameRead::Ended, "stop did not clear failure");
@@ -62,7 +70,9 @@ void test_resume_and_terminal_states() {
 void test_concurrent_queue() {
     rtsp::VideoFrameQueue queue({8, 64});
     std::thread producer([&] {
-        for (std::uint64_t i = 0; i < 20000; ++i) { queue.push(frame(i, i % 7 == 0)); }
+        for (std::uint64_t i = 0; i < 20000; ++i) {
+            queue.push(frame(i, i % 7 == 0));
+        }
         queue.finish();
     });
     bool valid = true;
@@ -73,10 +83,17 @@ void test_concurrent_queue() {
         const auto result = queue.read(out);
         const auto stats = queue.stats();
         valid = valid && stats.frames <= 8 && stats.bytes <= 64;
-        if (result == rtsp::VideoFrameRead::Ended) { break; }
-        if (result == rtsp::VideoFrameRead::Waiting) { std::this_thread::yield(); continue; }
+        if (result == rtsp::VideoFrameRead::Ended) {
+            break;
+        }
+        if (result == rtsp::VideoFrameRead::Waiting) {
+            std::this_thread::yield();
+            continue;
+        }
         valid = valid && (first ? out.is_keyframe : out.pts > previous);
-        if (!first && out.pts != previous + 1) { valid = valid && out.is_keyframe; }
+        if (!first && out.pts != previous + 1) {
+            valid = valid && out.is_keyframe;
+        }
         first = false;
         previous = out.pts;
     }
@@ -92,5 +109,8 @@ int main() {
         test_concurrent_queue();
         std::cout << "PASS: bounded queue, IDR recovery, resume, EOF, errors and concurrent access\n";
         return 0;
-    } catch (const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }
+    } catch (const std::exception& e) {
+        std::cerr << "FAIL: " << e.what() << '\n';
+        return 1;
+    }
 }

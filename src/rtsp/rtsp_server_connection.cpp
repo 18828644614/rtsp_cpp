@@ -110,10 +110,16 @@ void RtspServerConnection::start_shutdown() {
 }
 
 std::optional<RtspServerConnection::Clock::time_point> RtspServerConnection::next_deadline() const {
-    if (state_ == State::Closed) { return std::nullopt; }
+    if (state_ == State::Closed) {
+        return std::nullopt;
+    }
     auto deadline = state_ == State::Draining ? drain_deadline_ : session_deadline_;
-    if (!deadline) { deadline = last_read_ + options_.control_idle_timeout; }
-    if (waiting_write_) { deadline = std::min(*deadline, last_progress_ + options_.send_stall_timeout); }
+    if (!deadline) {
+        deadline = last_read_ + options_.control_idle_timeout;
+    }
+    if (waiting_write_) {
+        deadline = std::min(*deadline, last_progress_ + options_.send_stall_timeout);
+    }
     if (state_ == State::Open && subscription_) {
         if (const auto report = subscription_->next_rtcp_deadline()) {
             deadline = std::min(*deadline, *report);
@@ -180,7 +186,10 @@ void RtspServerConnection::handle_item(const RtspStreamItem& item) {
         } else {
             commit = false;
             response.headers.erase(std::remove_if(response.headers.begin(), response.headers.end(),
-                [](const RtspHeader& header) { return header.name == "RTP-Info"; }), response.headers.end());
+                                                  [](const RtspHeader& header) {
+                                                      return header.name == "RTP-Info";
+                                                  }),
+                                   response.headers.end());
             response.status_code = result == SubscribeResult::InvalidRange ? 457 : 455;
             response.reason = result == SubscribeResult::InvalidRange
                 ? "Invalid Range" : "Method Not Valid in This State";
@@ -270,7 +279,9 @@ void RtspServerConnection::on_writable() {
                 last_progress_ = Clock::now();
             }
             if (send_offset_ == sending_.wire.size()) {
-                if (subscription_) { subscription_->on_sent(sending_); }
+                if (subscription_) {
+                    subscription_->on_sent(sending_);
+                }
                 outbound_queue_->complete_send();
                 has_sending_ = false;
                 sending_.wire.clear();
@@ -342,7 +353,9 @@ void RtspServerConnection::check_timeout(Clock::time_point now) {
     }
     if (state_ == State::Open && subscription_) {
         subscription_->tick_rtcp(now, options_.rtcp_interval);
-        if (subscription_->failed()) { close(); }
+        if (subscription_->failed()) {
+            close();
+        }
     }
 }
 

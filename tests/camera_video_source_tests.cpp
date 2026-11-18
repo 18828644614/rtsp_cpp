@@ -20,7 +20,11 @@ extern "C" {
 namespace {
 using namespace std::chrono_literals;
 using Clock = std::chrono::steady_clock;
-void check(bool ok, const char* message) { if (!ok) { throw std::runtime_error(message); } }
+void check(bool ok, const char* message) {
+    if (!ok) {
+        throw std::runtime_error(message);
+    }
+}
 template<class Predicate> void await(Predicate done) {
     const auto until = Clock::now() + 3s;
     while (!done()) {
@@ -38,7 +42,12 @@ struct InputState {
     bool closed = false;
     std::thread::id reader;
     void update(int more = 0, bool end = false, bool error = false) {
-        { std::lock_guard<std::mutex> lock(mutex); credits += more; eof = end; fail = error; }
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            credits += more;
+            eof = end;
+            fail = error;
+        }
         wake.notify_all();
     }
 };
@@ -60,8 +69,12 @@ public:
         state_->wake.wait_for(lock, timeout, [&] {
             return state_->stopped || state_->fail || state_->eof || state_->credits > 0;
         });
-        if (state_->stopped) { return rtsp::CameraInputResult::Ended; }
-        if (state_->fail) { throw std::runtime_error("simulated device lost"); }
+        if (state_->stopped) {
+            return rtsp::CameraInputResult::Ended;
+        }
+        if (state_->fail) {
+            throw std::runtime_error("simulated device lost");
+        }
         if (state_->credits == 0) {
             return state_->eof ? rtsp::CameraInputResult::Ended : rtsp::CameraInputResult::Waiting;
         }
@@ -71,7 +84,10 @@ public:
         return rtsp::CameraInputResult::FrameReady;
     }
     void request_stop() noexcept override {
-        { std::lock_guard<std::mutex> lock(state_->mutex); state_->stopped = true; }
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            state_->stopped = true;
+        }
         state_->wake.notify_all();
     }
     void close() noexcept override {
@@ -101,13 +117,16 @@ void test_source_wait_drain_stop() {
           "startup did not retain complete IDR/time");
     check(!camera->read(frame) && frame.nalus.empty() && !camera->ended(), "waiting confused with EOF");
     state->update(2, true);
-    await([&] { return camera->queue_stats().closed; });
+    await([&] {
+        return camera->queue_stats().closed;
+    });
     check(!camera->ended(), "producer marked EOF before consumer drained");
     check(camera->read(frame) && frame.pts == 3000 && !frame.is_keyframe, "first P/time missing");
     check(camera->read(frame) && frame.pts == 6000, "EOF lost final encoded frame");
     check(!camera->read(frame) && camera->ended(), "EOF not latched after empty read");
     check(camera->track().fmtp == fmtp, "track changed concurrently");
-    camera->stop(); camera->stop();
+    camera->stop();
+    camera->stop();
     check_released(state);
 
     const auto blocked = std::make_shared<InputState>();
@@ -121,26 +140,44 @@ void test_startup_and_runtime_failures() {
     for (int mode = 0; mode < 4; ++mode) {
         const auto state = std::make_shared<InputState>();
         auto cfg = config();
-        if (mode != 3) { state->credits = 0; }
-        if (mode == 0) { cfg.startup_timeout = 50ms; }
-        if (mode == 1) { state->eof = true; }
-        if (mode == 2) { state->fail = true; }
-        if (mode == 3) { cfg.queue.max_bytes = 1; }
+        if (mode != 3) {
+            state->credits = 0;
+        }
+        if (mode == 0) {
+            cfg.startup_timeout = 50ms;
+        }
+        if (mode == 1) {
+            state->eof = true;
+        }
+        if (mode == 2) {
+            state->fail = true;
+        }
+        if (mode == 3) {
+            cfg.queue.max_bytes = 1;
+        }
         bool failed = false;
-        try { auto unused = source(state, cfg); }
-        catch (const std::runtime_error&) { failed = true; }
+        try {
+            auto unused = source(state, cfg);
+        } catch (const std::runtime_error&) {
+            failed = true;
+        }
         check(failed, "startup failure was not reported");
         check_released(state);
     }
     const auto state = std::make_shared<InputState>();
     auto camera = source(state);
     state->update(0, false, true);
-    await([&] { return camera->queue_stats().closed; });
+    await([&] {
+        return camera->queue_stats().closed;
+    });
     rtsp::H264AccessUnit frame;
     check(camera->read(frame), "runtime error lost buffered IDR");
     bool failed = false;
-    try { camera->read(frame); }
-    catch (const std::runtime_error& e) { failed = std::string(e.what()) == "simulated device lost"; }
+    try {
+        camera->read(frame);
+    } catch (const std::runtime_error& e) {
+        failed = std::string(e.what()) == "simulated device lost";
+    }
     check(failed, "runtime error not delivered to consumer");
 }
 void test_overflow_and_resume() {
@@ -149,13 +186,17 @@ void test_overflow_and_resume() {
     cfg.queue.max_frames = 2;
     auto camera = source(state, cfg);
     state->update(4); // 0/1 入队，2 溢出丢弃；3(IDR)/4 保留。
-    await([&] { return camera->queue_stats().dropped == 3 && camera->queue_stats().frames == 2; });
+    await([&] {
+        return camera->queue_stats().dropped == 3 && camera->queue_stats().frames == 2;
+    });
     rtsp::H264AccessUnit frame;
     check(camera->read(frame) && frame.is_keyframe && frame.pts == 9000, "overflow did not recover on IDR");
     camera->resume(); // 剩下的 4 是 P，必须丢弃。
     check(!camera->read(frame) && !camera->ended(), "resume retained undecodable P");
     state->update(2); // 5 丢弃，6(IDR) 恢复。
-    await([&] { return camera->queue_stats().frames == 1; });
+    await([&] {
+        return camera->queue_stats().frames == 1;
+    });
     check(camera->read(frame) && frame.is_keyframe && frame.pts == 18000, "resume missed next IDR");
 }
 
@@ -180,8 +221,13 @@ int decode_output(Peer& peer) {
         std::string au;
         bool play = false;
         while (peer.queue->try_pop(message)) {
-            if (message.kind == rtsp::net::OutboundKind::RtspResponse) { play = true; continue; }
-            if (message.kind != rtsp::net::OutboundKind::Rtp) { continue; }
+            if (message.kind == rtsp::net::OutboundKind::RtspResponse) {
+                play = true;
+                continue;
+            }
+            if (message.kind != rtsp::net::OutboundKind::Rtp) {
+                continue;
+            }
             check(play, "RTP preceded PLAY");
             rtsp::RtspStreamParser parser;
             parser.append(message.wire.data(), message.wire.size());
@@ -191,9 +237,12 @@ int decode_output(Peer& peer) {
             std::vector<std::string> nalus;
             check(depacketizer.push(rtp, nalus) != rtsp::H264Dropped, "RTP depacketizer dropped NALU");
             for (const auto& nalu : nalus) {
-                au.append("\0\0\0\1", 4); au += nalu;
+                au.append("\0\0\0\1", 4);
+                au += nalu;
             }
-            if (!rtp.marker) { continue; }
+            if (!rtp.marker) {
+                continue;
+            }
             check(av_new_packet(packet, static_cast<int>(au.size())) >= 0, "allocate AU packet");
             std::copy(au.begin(), au.end(), packet->data);
             check(avcodec_send_packet(context, packet) >= 0, "send AU to decoder");
@@ -201,15 +250,24 @@ int decode_output(Peer& peer) {
             au.clear();
             while (avcodec_receive_frame(context, frame) == 0) {
                 check(frame->width == 64 && frame->height == 48, "decoded dimensions wrong");
-                ++count; av_frame_unref(frame);
+                ++count;
+                av_frame_unref(frame);
             }
         }
         check(avcodec_send_packet(context, nullptr) >= 0, "flush decoder");
-        while (avcodec_receive_frame(context, frame) == 0) { ++count; av_frame_unref(frame); }
+        while (avcodec_receive_frame(context, frame) == 0) {
+            ++count;
+            av_frame_unref(frame);
+        }
     } catch (...) {
-        av_frame_free(&frame); av_packet_free(&packet); avcodec_free_context(&context); throw;
+        av_frame_free(&frame);
+        av_packet_free(&packet);
+        avcodec_free_context(&context);
+        throw;
     }
-    av_frame_free(&frame); av_packet_free(&packet); avcodec_free_context(&context);
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&context);
     return count;
 }
 void test_media_session(bool failure) {
@@ -224,8 +282,12 @@ void test_media_session(bool failure) {
     check(!media.ended() && !peer.queue->closed() && media.next_deadline()
               && *media.next_deadline() > now, "live wait closed session or busy-polled");
     state->update(failure ? 0 : 5, !failure, failure);
-    await([&] { return observer->queue_stats().closed; });
-    for (int i = 1; i <= 8 && !media.ended(); ++i) { media.tick(now + i * 40ms); }
+    await([&] {
+        return observer->queue_stats().closed;
+    });
+    for (int i = 1; i <= 8 && !media.ended(); ++i) {
+        media.tick(now + i * 40ms);
+    }
     check(media.ended() && peer.queue->closed() && peer.subscription->failed() == failure,
           "session did not distinguish normal end and device failure");
     check(decode_output(peer) == (failure ? 1 : 6), "MediaSession RTP did not decode all frames");
@@ -239,7 +301,9 @@ void test_idle_and_session_stop() {
     media.tick(Clock::now());
     check(!media.next_deadline() && observer->queue_stats().frames == 1, "idle session consumed camera");
     state->update(4);
-    await([&] { return observer->queue_stats().frames == 5; });
+    await([&] {
+        return observer->queue_stats().frames == 5;
+    });
     Peer peer(media.description().tracks[0]);
     media.subscribe(peer.subscription, "PLAY 200");
     check(observer->queue_stats().frames == 2, "first watcher did not trim to latest IDR");
@@ -248,12 +312,15 @@ void test_idle_and_session_stop() {
     media.tick(Clock::now());
     check(!media.next_deadline(), "idle live session retained deadline");
     state->update(3);
-    await([&] { return observer->queue_stats().frames >= 3; });
+    await([&] {
+        return observer->queue_stats().frames >= 3;
+    });
     Peer resumed(media.description().tracks[0]);
     media.subscribe(resumed.subscription, "PLAY 200");
     media.tick(Clock::now());
     const auto begin = Clock::now();
-    media.stop(); media.stop();
+    media.stop();
+    media.stop();
     check(Clock::now() - begin < 1s && observer->ended(), "session stop did not join source");
     check_released(state);
     check(decode_output(resumed) == 1, "resume delivered stale prefetched P frame");
@@ -267,15 +334,22 @@ void test_startup_cancellation() {
     std::thread constructor([&] {
         try {
             rtsp::CameraVideoSource camera(std::make_unique<GeneratedInput>(state), config(), &stopped);
-        } catch (...) { failure = std::current_exception(); }
+        } catch (...) {
+            failure = std::current_exception();
+        }
     });
     // 不在生产线程停止前读取未加锁的 reader/closed。
     std::this_thread::sleep_for(30ms);
     stopped.store(true);
     constructor.join();
     bool cancelled = false;
-    try { if (failure) { std::rethrow_exception(failure); } }
-    catch (const std::runtime_error& error) { cancelled = std::string(error.what()) == "camera startup stopped"; }
+    try {
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    } catch (const std::runtime_error& error) {
+        cancelled = std::string(error.what()) == "camera startup stopped";
+    }
     check(cancelled, "startup did not observe console stop");
     check_released(state);
 }
@@ -285,8 +359,11 @@ void test_capture_adapter_without_device() {
     auto input = rtsp::make_camera_capture_input({});
     input->request_stop();
     bool stopped = false;
-    try { rtsp::CameraVideoSource camera(std::move(input), config()); }
-    catch (const std::runtime_error&) { stopped = true; }
+    try {
+        rtsp::CameraVideoSource camera(std::move(input), config());
+    } catch (const std::runtime_error&) {
+        stopped = true;
+    }
     check(stopped, "pre-stopped capture adapter opened device or accepted startup");
 
     rtsp::CameraConfig invalid;
@@ -294,7 +371,9 @@ void test_capture_adapter_without_device() {
     bool rejected = false;
     try {
         rtsp::CameraVideoSource camera(rtsp::make_camera_capture_input(invalid), config());
-    } catch (const std::invalid_argument&) { rejected = true; }
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
     check(rejected, "capture adapter did not propagate worker open failure");
 }
 #endif
@@ -314,5 +393,8 @@ int main() {
 #endif
         std::cout << "PASS: generated capture/encode, live wait/end/failure, overflow, resume, RTP decode and stop\n";
         return 0;
-    } catch (const std::exception& e) { std::cerr << "FAIL: " << e.what() << '\n'; return 1; }
+    } catch (const std::exception& e) {
+        std::cerr << "FAIL: " << e.what() << '\n';
+        return 1;
+    }
 }

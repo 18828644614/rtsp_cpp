@@ -75,9 +75,14 @@ std::shared_ptr<AVFrame> AudioResampler::convert(const AVFrame& input) {
 }
 
 std::shared_ptr<AVFrame> AudioResampler::flush() {
-    if (impl_->finished || !impl_->context) { impl_->finished = true; return nullptr; }
+    if (impl_->finished || !impl_->context) {
+        impl_->finished = true;
+        return nullptr;
+    }
     auto output = impl_->convert(nullptr);
-    if (!output) { impl_->finished = true; }
+    if (!output) {
+        impl_->finished = true;
+    }
     return output;
 }
 

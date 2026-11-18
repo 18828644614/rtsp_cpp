@@ -101,7 +101,9 @@ std::vector<Packet> collect(Peer& peer) {
     std::vector<Packet> packets;
     rtsp::net::OutboundMessage message;
     while (pop(peer, message)) {
-        if (message.kind == rtsp::net::OutboundKind::Rtcp) { continue; }
+        if (message.kind == rtsp::net::OutboundKind::Rtcp) {
+            continue;
+        }
         packets.push_back(decode(message.wire));
     }
     check(!peer.subscription->failed(), "multitrack subscription failed");
@@ -299,17 +301,16 @@ void test_tcp_two_setup_and_media() {
     check(describe.status_code == 200 && rtsp::parse_sdp(describe.body).tracks.size() == 2,
           "DESCRIBE did not return two usable tracks");
     const auto video = exchange(socket, parser, "SETUP", "/trackID=0", 2,
-        "Transport: RTP/AVP/TCP;unicast;interleaved=6-7\r\n");
+                                "Transport: RTP/AVP/TCP;unicast;interleaved=6-7\r\n");
     check(video.status_code == 200, "video SETUP failed");
     const std::string session = "Session: " + video.header("Session") + "\r\n";
     check(exchange(socket, parser, "SETUP", "/trackID=1", 3,
-        "Transport: RTP/AVP/TCP;unicast;interleaved=10-11\r\n").status_code == 454,
-        "second SETUP accepted missing Session");
-    check(exchange(socket, parser, "SETUP", "/trackID=1", 4, session
-        + "Transport: RTP/AVP/TCP;unicast;interleaved=7-8\r\n").status_code == 461,
-        "overlapping RTP/RTCP channels were accepted");
-    const auto audio = exchange(socket, parser, "SETUP", "/trackID=1", 5, session
-        + "Transport: RTP/AVP/TCP;unicast;interleaved=8-9\r\n");
+                   "Transport: RTP/AVP/TCP;unicast;interleaved=10-11\r\n")
+                  .status_code == 454,
+          "second SETUP accepted missing Session");
+    check(exchange(socket, parser, "SETUP", "/trackID=1", 4, session + "Transport: RTP/AVP/TCP;unicast;interleaved=7-8\r\n").status_code == 461,
+          "overlapping RTP/RTCP channels were accepted");
+    const auto audio = exchange(socket, parser, "SETUP", "/trackID=1", 5, session + "Transport: RTP/AVP/TCP;unicast;interleaved=8-9\r\n");
     check(audio.status_code == 200 && audio.header("Session") == video.header("Session"),
           "second track changed Session or was rejected");
     check(exchange(socket, parser, "PLAY", "", 6, session).status_code == 200, "two-track PLAY failed");
@@ -345,7 +346,9 @@ void test_tcp_two_setup_and_media() {
     test::wait_finished(connection);
     check(connection.finished() && !packets.empty(), "connection did not release after EOF");
     const auto first_audio = std::find_if(packets.begin(), packets.end(),
-        [](const Packet& packet) { return packet.rtp.payload_type == 97; });
+                                          [](const Packet& packet) {
+                                              return packet.rtp.payload_type == 97;
+                                          });
     check(first_audio != packets.end() && first_audio->rtp.timestamp != 0, "network audio needs a nonzero RTP origin");
     check_packets(packets, 8, 20, 6, packets[0].rtp.ssrc, 0, first_audio->rtp.timestamp);
 }
@@ -366,7 +369,7 @@ void test_tcp_zero_range_late_join() {
     check(exchange(first_socket, first_parser, "DESCRIBE", "", 1).status_code == 200,
           "first DESCRIBE failed");
     const auto first_setup = exchange(first_socket, first_parser, "SETUP", "/trackID=0", 2,
-        "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
+                                      "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
     check(first_setup.status_code == 200, "first SETUP failed");
     const std::string first_session = "Session: " + first_setup.header("Session") + "\r\n";
     check(exchange(first_socket, first_parser, "PLAY", "", 3, first_session).status_code == 200,
@@ -383,7 +386,7 @@ void test_tcp_zero_range_late_join() {
     check(exchange(second_socket, second_parser, "DESCRIBE", "", 1).status_code == 200,
           "second DESCRIBE failed");
     const auto second_setup = exchange(second_socket, second_parser, "SETUP", "/trackID=0", 2,
-        "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
+                                       "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n");
     check(second_setup.status_code == 200, "second SETUP failed");
     const std::string second_session = "Session: " + second_setup.header("Session")
         + "\r\nRange: npt=0.000-\r\n";

@@ -13,13 +13,19 @@ extern "C" {
 namespace {
 
 void check(bool valid, const char* message) {
-    if (!valid) { throw std::runtime_error(message); }
+    if (!valid) {
+        throw std::runtime_error(message);
+    }
 }
 
 template <typename Action>
 void rejects(Action action) {
     bool rejected = false;
-    try { action(); } catch (const std::invalid_argument&) { rejected = true; }
+    try {
+        action();
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
     check(rejected, "invalid camera configuration was accepted");
 }
 
@@ -27,19 +33,29 @@ void configuration_tests() {
     rtsp::CameraCapture capture;
     rtsp::CameraConfig config;
     config.width = 0;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config = {};
     config.height = -1;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config = {};
     config.fps_den = 0;
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config = {};
     config.device_name.clear();
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     config = {};
     config.pixel_format = "mjpeg";
-    rejects([&] { capture.open(config); });
+    rejects([&] {
+        capture.open(config);
+    });
     rtsp::CameraFrame frame;
     frame.width = 123;
     frame.source_pts = 456;
@@ -70,8 +86,11 @@ void hardware_tests(const std::string& device) {
     auto missing = config;
     missing.device_name = "__camera_capture_test_missing_device__";
     bool open_failed = false;
-    try { capture.open(missing); }
-    catch (const std::runtime_error&) { open_failed = true; }
+    try {
+        capture.open(missing);
+    } catch (const std::runtime_error&) {
+        open_failed = true;
+    }
     check(open_failed, "missing camera unexpectedly opened");
     capture.close();
     rtsp::CameraFrame retained;
@@ -97,8 +116,11 @@ void hardware_tests(const std::string& device) {
             "frame sequence or timestamp did not advance");
         check(retained.buffer->data[0][0] == first_byte, "next read invalidated retained frame");
         bool timeout_rejected = false;
-        try { capture.read(next, std::chrono::milliseconds(-1)); }
-        catch (const std::invalid_argument&) { timeout_rejected = true; }
+        try {
+            capture.read(next, std::chrono::milliseconds(-1));
+        } catch (const std::invalid_argument&) {
+            timeout_rejected = true;
+        }
         check(timeout_rejected, "negative read timeout was accepted");
         bool timed_out = false;
         for (int attempt = 0; attempt < 10; ++attempt) {
@@ -121,8 +143,9 @@ void hardware_tests(const std::string& device) {
             return stopped_at;
         });
         rtsp::CaptureResult result;
-        do { result = capture.read(next, std::chrono::seconds(5)); }
-        while (result == rtsp::CaptureResult::FrameReady);
+        do {
+            result = capture.read(next, std::chrono::seconds(5));
+        } while (result == rtsp::CaptureResult::FrameReady);
         const auto stopped_at = stopper.get();
         check(result == rtsp::CaptureResult::Stopped, "stop did not wake capture reader");
         check(std::chrono::steady_clock::now() - stopped_at < std::chrono::seconds(1),
@@ -140,8 +163,11 @@ void hardware_tests(const std::string& device) {
 int main(int argc, char* argv[]) {
     try {
         configuration_tests();
-        if (argc == 3 && std::string(argv[1]) == "--device") { hardware_tests(argv[2]); }
-        else if (argc != 1) { throw std::invalid_argument("usage: camera_capture_tests [--device NAME]"); }
+        if (argc == 3 && std::string(argv[1]) == "--device") {
+            hardware_tests(argv[2]);
+        } else if (argc != 1) {
+            throw std::invalid_argument("usage: camera_capture_tests [--device NAME]");
+        }
         std::cout << "camera_capture_tests passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -69,7 +69,9 @@ struct Peer {
 };
 
 rtsp::net::OutboundMessage pop(Peer& peer) {
-    wait_for([&] { return peer.queue->bytes() != 0 || peer.queue->closed(); });
+    wait_for([&] {
+        return peer.queue->bytes() != 0 || peer.queue->closed();
+    });
     rtsp::net::OutboundMessage message;
     check(peer.queue->try_pop(message), "unexpected end of queue");
     return message;
@@ -146,7 +148,9 @@ void test_shared_progress_and_late_join() {
                   && frame.timestamp == static_cast<std::uint32_t>((index - 5) * 3600),
               "clients did not share remaining AU sequence");
     }
-    wait_for([&] { return media.ended() && a.queue->closed() && b.queue->closed(); });
+    wait_for([&] {
+        return media.ended() && a.queue->closed() && b.queue->closed();
+    });
     check(!a.subscription->failed() && !b.subscription->failed(), "normal EOF reported failure");
     Peer after_eof;
     check(media.subscribe(after_eof.subscription, "PLAY 200") == rtsp::SubscribeResult::Ended
@@ -192,11 +196,15 @@ void test_slow_peer_and_waiting_at_eof() {
     check(read_frame(healthy, seq, 0, 1).index == 0, "healthy client missed start");
     Peer slow(32);
     play(media, slow);
-    wait_for([&] { return slow.subscription->failed(); });
+    wait_for([&] {
+        return slow.subscription->failed();
+    });
     for (int index = 1; index < 8; ++index) {
         check(read_frame(healthy, seq, 0, 1).index == index, "slow peer affected healthy client");
     }
-    wait_for([&] { return media.ended(); });
+    wait_for([&] {
+        return media.ended();
+    });
     check(!healthy.subscription->failed(), "slow peer ended shared source");
 
     save_sample(4, 10);  // 只有开头一个 IDR，晚加入者一直等到 EOF。
@@ -207,7 +215,9 @@ void test_slow_peer_and_waiting_at_eof() {
     read_frame(a, seq, 0, 1);
     Peer waiting;
     play(no_more_idr, waiting);
-    wait_for([&] { return waiting.queue->closed(); });
+    wait_for([&] {
+        return waiting.queue->closed();
+    });
     check(waiting.queue->bytes() == 0 && waiting.subscription->finished(),
           "waiting peer received P frames or remained subscribed at EOF");
 }
@@ -273,17 +283,31 @@ public:
     bool read(rtsp::H264AccessUnit& frame) override {
         frame = {};
         ++reads;
-        if (fail) { throw std::runtime_error("simulated live input failure"); }
-        if (!ready) { return false; }
+        if (fail) {
+            throw std::runtime_error("simulated live input failure");
+        }
+        if (!ready) {
+            return false;
+        }
         ready = false;
         frame = {{std::string("\x65\x30", 2)}, true, 0, 3000};
         return true;
     }
-    bool ended() const override { return eof; }
-    const rtsp::MediaTrack& track() const override { return track_; }
-    bool is_live() const override { return true; }
-    void resume() override { ++resumes; }
-    void stop() override { stopped = true; }
+    bool ended() const override {
+        return eof;
+    }
+    const rtsp::MediaTrack& track() const override {
+        return track_;
+    }
+    bool is_live() const override {
+        return true;
+    }
+    void resume() override {
+        ++resumes;
+    }
+    void stop() override {
+        stopped = true;
+    }
     bool ready = false;
     bool eof = false;
     bool fail = false;
@@ -312,8 +336,11 @@ void test_live_waiting_and_end() {
         source->ready = true;
         media.tick(start + std::chrono::milliseconds(5));
         check(!media.ended() && !peer.queue->closed(), "frame followed by Waiting ended live source");
-        if (failure) { source->fail = true; }
-        else { source->eof = true; }
+        if (failure) {
+            source->fail = true;
+        } else {
+            source->eof = true;
+        }
         media.tick(start + std::chrono::milliseconds(10));
         check(media.ended() && source->stopped && peer.queue->closed()
                   && peer.subscription->failed() == failure,
@@ -410,12 +437,16 @@ void test_injected_audio_file(bool with_video) {
                   && first.kind == second.kind && first.kind == third.kind
                   && first.wire == second.wire && first.wire == third.wire,
               "audio source injection changed output");
-        if (first.kind != rtsp::net::OutboundKind::Rtp) { continue; }
+        if (first.kind != rtsp::net::OutboundKind::Rtp) {
+            continue;
+        }
         rtsp::RtspStreamParser parser;
         parser.append(first.wire.data(), first.wire.size());
         rtsp::RtspStreamItem item;
         check(parser.next(item) && item.is_interleaved, "invalid injected RTP");
-        if (item.channel != (with_video ? 2u : 0u)) { continue; }
+        if (item.channel != (with_video ? 2u : 0u)) {
+            continue;
+        }
         const auto packet = rtsp::parse_rtp_packet(item.payload);
         check(packet.payload_type == 97 && packet.timestamp == audio_packets * 1024u
                   && packet.payload == std::string("\0\x10\0\x18\x11\x22\x33", 7),
@@ -441,17 +472,31 @@ public:
     bool read(rtsp::AacAccessUnit& frame) override {
         frame = {};
         ++reads;
-        if (fail) { throw std::runtime_error("simulated live audio failure"); }
-        if (!ready) { return false; }
+        if (fail) {
+            throw std::runtime_error("simulated live audio failure");
+        }
+        if (!ready) {
+            return false;
+        }
         ready = false;
         frame = {std::string("\x11\x22\x33", 3), pts, 1024};
         return true;
     }
-    bool ended() const override { return eof; }
-    const rtsp::MediaTrack& track() const override { return track_; }
-    bool is_live() const override { return true; }
-    void resume() override { ++resumes; }
-    void stop() override { ++stops; }
+    bool ended() const override {
+        return eof;
+    }
+    const rtsp::MediaTrack& track() const override {
+        return track_;
+    }
+    bool is_live() const override {
+        return true;
+    }
+    void resume() override {
+        ++resumes;
+    }
+    void stop() override {
+        ++stops;
+    }
     bool ready = false;
     bool eof = false;
     bool fail = false;
@@ -556,7 +601,9 @@ void test_audio_wait_with_future_video() {
     bool saw_audio = false;
     rtsp::net::OutboundMessage message;
     while (peer.queue->try_pop(message)) {
-        if (message.kind != rtsp::net::OutboundKind::Rtp) { continue; }
+        if (message.kind != rtsp::net::OutboundKind::Rtp) {
+            continue;
+        }
         rtsp::RtspStreamParser parser;
         parser.append(message.wire.data(), message.wire.size());
         rtsp::RtspStreamItem item;
@@ -616,7 +663,7 @@ void test_connection_stop(bool playing) {
                   "connection sent media before response or rejected request");
         };
         const std::string setup = "SETUP rtsp://127.0.0.1/live/trackID=0 RTSP/1.0\r\n"
-            "CSeq: 1\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n";
+                                  "CSeq: 1\r\nTransport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n";
         client.send_all(setup.data(), setup.size());
         response();
         const std::string play_request = "PLAY rtsp://127.0.0.1/live RTSP/1.0\r\n"

@@ -18,13 +18,19 @@ MicrophoneAudioSource::MicrophoneAudioSource(std::unique_ptr<AudioFrameInput> in
         std::unique_lock<std::mutex> lock(startup_mutex_);
         const auto deadline = std::chrono::steady_clock::now() + config.startup_timeout;
         while (!ready_ && !producer_done_) {
-            if (stop_requested && stop_requested->load()) { throw std::runtime_error("audio startup stopped"); }
+            if (stop_requested && stop_requested->load()) {
+                throw std::runtime_error("audio startup stopped");
+            }
             const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) { throw std::runtime_error("audio startup timed out waiting for AAC"); }
+            if (now >= deadline) {
+                throw std::runtime_error("audio startup timed out waiting for AAC");
+            }
             startup_wake_.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(20)));
         }
         if (!ready_) {
-            if (startup_error_) { std::rethrow_exception(startup_error_); }
+            if (startup_error_) {
+                std::rethrow_exception(startup_error_);
+            }
             throw std::runtime_error("audio ended before AAC became available");
         }
     } catch (...) {
@@ -33,12 +39,18 @@ MicrophoneAudioSource::MicrophoneAudioSource(std::unique_ptr<AudioFrameInput> in
     }
 }
 
-MicrophoneAudioSource::~MicrophoneAudioSource() { stop(); }
+MicrophoneAudioSource::~MicrophoneAudioSource() {
+    stop();
+}
 
 void MicrophoneAudioSource::publish(std::vector<AacAccessUnit> frames, const AacEncoder& encoder) {
     for (auto& frame : frames) {
-        if (stopping_.load()) { return; }
-        if (!queue_.push(std::move(frame))) { return; }
+        if (stopping_.load()) {
+            return;
+        }
+        if (!queue_.push(std::move(frame))) {
+            return;
+        }
         if (!ready_) {
             std::lock_guard<std::mutex> lock(startup_mutex_);
             track_ = encoder.track();
@@ -57,18 +69,25 @@ void MicrophoneAudioSource::produce() noexcept {
         while (!stopping_.load()) {
             AudioFrame frame;
             const auto result = input_->read(frame, config_.read_timeout);
-            if (stopping_.load()) { break; }
+            if (stopping_.load()) {
+                break;
+            }
             if (result == AudioInputResult::Waiting) {
                 if (std::chrono::steady_clock::now() - last_data >= config_.no_data_timeout) {
                     throw std::runtime_error("audio input timed out without PCM");
                 }
                 continue;
             }
-            if (result == AudioInputResult::Ended) { publish(encoder.flush(), encoder); break; }
+            if (result == AudioInputResult::Ended) {
+                publish(encoder.flush(), encoder);
+                break;
+            }
             last_data = std::chrono::steady_clock::now();
             publish(encoder.encode(frame), encoder);
         }
-    } catch (...) { error = std::current_exception(); }
+    } catch (...) {
+        error = std::current_exception();
+    }
     input_->close();
     queue_.finish(error);
     {
@@ -81,19 +100,31 @@ void MicrophoneAudioSource::produce() noexcept {
 
 bool MicrophoneAudioSource::read(AacAccessUnit& frame) {
     const auto result = queue_.read(frame);
-    if (result == AudioFrameRead::Ended) { ended_ = true; }
+    if (result == AudioFrameRead::Ended) {
+        ended_ = true;
+    }
     return result == AudioFrameRead::FrameReady;
 }
 
-bool MicrophoneAudioSource::ended() const { return ended_; }
-const MediaTrack& MicrophoneAudioSource::track() const { return track_; }
-void MicrophoneAudioSource::resume() { queue_.resume_at_latest(); }
-AudioFrameQueueStats MicrophoneAudioSource::queue_stats() const { return queue_.stats(); }
+bool MicrophoneAudioSource::ended() const {
+    return ended_;
+}
+const MediaTrack& MicrophoneAudioSource::track() const {
+    return track_;
+}
+void MicrophoneAudioSource::resume() {
+    queue_.resume_at_latest();
+}
+AudioFrameQueueStats MicrophoneAudioSource::queue_stats() const {
+    return queue_.stats();
+}
 
 void MicrophoneAudioSource::stop() {
     stopping_.store(true);
     input_->request_stop();
-    if (worker_.joinable()) { worker_.join(); }
+    if (worker_.joinable()) {
+        worker_.join();
+    }
     queue_.discard_and_finish();
     ended_ = true;
 }

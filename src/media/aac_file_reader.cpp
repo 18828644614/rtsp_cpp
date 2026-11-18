@@ -20,8 +20,7 @@ std::string make_aac_fmtp(int frequency_index, int channels) {
     for (int shift = 12; shift >= 0; shift -= 4) {
         value += hex[(config >> shift) & 15];
     }
-    return "streamtype=5;profile-level-id=1;mode=AAC-hbr;config=" + value
-        + ";SizeLength=13;IndexLength=3;IndexDeltaLength=3";
+    return "streamtype=5;profile-level-id=1;mode=AAC-hbr;config=" + value + ";SizeLength=13;IndexLength=3;IndexDeltaLength=3";
 }
 
 }  // namespace

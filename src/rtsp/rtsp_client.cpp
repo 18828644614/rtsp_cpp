@@ -61,7 +61,9 @@ void RtspClient::check_session(const RtspMessage& response) {
     if (header.id != session_id_) {
         throw std::runtime_error("server changed or omitted the Session id");
     }
-    if (header.timeout_seconds) { session_timeout_seconds_ = *header.timeout_seconds; }
+    if (header.timeout_seconds) {
+        session_timeout_seconds_ = *header.timeout_seconds;
+    }
 }
 
 void RtspClient::handle_interleaved(const RtspStreamItem& item) {
@@ -120,8 +122,12 @@ void RtspClient::receive_media(unsigned int frame_limit) {
                     || response.header("CSeq") != pending_cseq) {
                     throw std::runtime_error("unexpected RTSP message during media reception");
                 }
-                if (response.status_code < 200) { continue; }
-                if (response.status_code != 200) { throw std::runtime_error("Session keepalive failed"); }
+                if (response.status_code < 200) {
+                    continue;
+                }
+                if (response.status_code != 200) {
+                    throw std::runtime_error("Session keepalive failed");
+                }
                 check_session(response);
                 interval = std::chrono::milliseconds(static_cast<long long>(session_timeout_seconds_) * 500);
                 pending_cseq.clear();
@@ -236,7 +242,9 @@ void RtspClient::run(const std::string& url, const std::string& output_path,
         throw std::runtime_error("SETUP did not return a valid Session id");
     }
     session_id_ = session_id;
-    if (session_header.timeout_seconds) { session_timeout_seconds_ = *session_header.timeout_seconds; }
+    if (session_header.timeout_seconds) {
+        session_timeout_seconds_ = *session_header.timeout_seconds;
+    }
     transport_ = negotiated;
     std::cout << "Video: " << video_.encoding << '/' << video_.clock_rate
               << ", payload=" << video_.payload_type << "\nTrack: " << track_url

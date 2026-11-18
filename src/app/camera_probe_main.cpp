@@ -31,13 +31,17 @@ public:
             throw std::runtime_error("could not register console stop handler");
         }
     }
-    ~ConsoleScope() { SetConsoleCtrlHandler(on_console_control, FALSE); }
+    ~ConsoleScope() {
+        SetConsoleCtrlHandler(on_console_control, FALSE);
+    }
 };
 
 std::string utf8(const wchar_t* text) {
     const int size = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
         text, -1, nullptr, 0, nullptr, nullptr);
-    if (size <= 0) { throw std::invalid_argument("invalid Unicode argument"); }
+    if (size <= 0) {
+        throw std::invalid_argument("invalid Unicode argument");
+    }
     std::string result(static_cast<std::size_t>(size), '\0');
     WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
         text, -1, result.data(), size, nullptr, nullptr);
@@ -46,7 +50,9 @@ std::string utf8(const wchar_t* text) {
 }
 
 int number(const std::string& text, int minimum, int maximum, const std::string& option) {
-    if (text.empty()) { throw std::invalid_argument("missing number for " + option); }
+    if (text.empty()) {
+        throw std::invalid_argument("missing number for " + option);
+    }
     int value = 0;
     for (char digit : text) {
         if (digit < '0' || digit > '9' || value > (maximum - (digit - '0')) / 10) {
@@ -83,10 +89,18 @@ void print_frame(const rtsp::CameraFrame& frame) {
         std::cout << (index ? "," : "") << frame.linesize[index];
     }
     std::cout << " source_pts=";
-    if (frame.source_pts) { std::cout << *frame.source_pts; } else { std::cout << "missing"; }
+    if (frame.source_pts) {
+        std::cout << *frame.source_pts;
+    } else {
+        std::cout << "missing";
+    }
     std::cout << " time_base=" << frame.time_base_num << '/' << frame.time_base_den
               << " source_duration=" << frame.source_duration << " relative_pts_us=";
-    if (frame.relative_pts_us) { std::cout << *frame.relative_pts_us; } else { std::cout << "missing"; }
+    if (frame.relative_pts_us) {
+        std::cout << *frame.relative_pts_us;
+    } else {
+        std::cout << "missing";
+    }
     std::cout << " arrival_steady_us=" << frame.arrival_steady_us << '\n';
 }
 
@@ -106,27 +120,51 @@ int wmain(int argc, wchar_t* argv[]) {
         int repeat = 1;
         for (int index = 1; index < argc; ++index) {
             const std::string option = utf8(argv[index]);
-            if (option == "--help") { usage(); return 0; }
-            if (option == "--list") { list = true; continue; }
-            if (option == "--quiet") { quiet = true; continue; }
+            if (option == "--help") {
+                usage();
+                return 0;
+            }
+            if (option == "--list") {
+                list = true;
+                continue;
+            }
+            if (option == "--quiet") {
+                quiet = true;
+                continue;
+            }
             if (option != "--device" && option != "--device-index" && option != "--width" &&
                 option != "--height" && option != "--fps" && option != "--pixel-format" &&
                 option != "--frames" && option != "--seconds" && option != "--timeout-ms" &&
                 option != "--repeat") {
                 throw std::invalid_argument("unknown option: " + option);
             }
-            if (++index == argc) { throw std::invalid_argument("missing value for " + option); }
+            if (++index == argc) {
+                throw std::invalid_argument("missing value for " + option);
+            }
             const std::string value = utf8(argv[index]);
-            if (option == "--device") { config.device_name = value; explicit_device = true; }
-            else if (option == "--device-index") { device_index = number(value, 0, 10000, option); }
-            else if (option == "--width") { config.width = number(value, 1, 16384, option); }
-            else if (option == "--height") { config.height = number(value, 1, 16384, option); }
-            else if (option == "--fps") { config.fps_num = number(value, 1, 240, option); }
-            else if (option == "--pixel-format") { config.pixel_format = value; }
-            else if (option == "--frames") { frames = number(value, 0, 1000000, option); explicit_frames = true; }
-            else if (option == "--seconds") { seconds = number(value, 1, 86400, option); }
-            else if (option == "--timeout-ms") { timeout_ms = number(value, 1, 60000, option); }
-            else if (option == "--repeat") { repeat = number(value, 1, 1000, option); }
+            if (option == "--device") {
+                config.device_name = value;
+                explicit_device = true;
+            } else if (option == "--device-index") {
+                device_index = number(value, 0, 10000, option);
+            } else if (option == "--width") {
+                config.width = number(value, 1, 16384, option);
+            } else if (option == "--height") {
+                config.height = number(value, 1, 16384, option);
+            } else if (option == "--fps") {
+                config.fps_num = number(value, 1, 240, option);
+            } else if (option == "--pixel-format") {
+                config.pixel_format = value;
+            } else if (option == "--frames") {
+                frames = number(value, 0, 1000000, option);
+                explicit_frames = true;
+            } else if (option == "--seconds") {
+                seconds = number(value, 1, 86400, option);
+            } else if (option == "--timeout-ms") {
+                timeout_ms = number(value, 1, 60000, option);
+            } else if (option == "--repeat") {
+                repeat = number(value, 1, 1000, option);
+            }
         }
         if (explicit_device && device_index >= 0) {
             throw std::invalid_argument("--device and --device-index are mutually exclusive");
@@ -148,7 +186,9 @@ int wmain(int argc, wchar_t* argv[]) {
             }
             config.device_name = devices[static_cast<std::size_t>(device_index)].name;
         }
-        if (seconds && !explicit_frames) { frames = 0; }
+        if (seconds && !explicit_frames) {
+            frames = 0;
+        }
         ConsoleScope console;
         rtsp::CameraCapture capture;
         for (int run = 1; run <= repeat && !console_stop.load(); ++run) {
@@ -171,7 +211,10 @@ int wmain(int argc, wchar_t* argv[]) {
             bool failed = false;
             std::string reason = "frame_limit";
             while (!frames || count < static_cast<std::uint64_t>(frames)) {
-                if (console_stop.load()) { reason = "console_stop"; break; }
+                if (console_stop.load()) {
+                    reason = "console_stop";
+                    break;
+                }
                 if (seconds && Clock::now() - started >= std::chrono::seconds(seconds)) {
                     reason = "duration_limit";
                     break;
@@ -180,9 +223,13 @@ int wmain(int argc, wchar_t* argv[]) {
                 const auto result = capture.read(frame, std::chrono::milliseconds(100));
                 if (result == rtsp::CaptureResult::FrameReady) {
                     last_frame = Clock::now();
-                    if (!quiet || count == 0) { print_frame(frame); }
+                    if (!quiet || count == 0) {
+                        print_frame(frame);
+                    }
                     if (frame.relative_pts_us) {
-                        if (!first_pts_us) { first_pts_us = frame.relative_pts_us; }
+                        if (!first_pts_us) {
+                            first_pts_us = frame.relative_pts_us;
+                        }
                         last_pts_us = frame.relative_pts_us;
                     }
                     ++count;
@@ -212,7 +259,9 @@ int wmain(int argc, wchar_t* argv[]) {
                 std::cout << " source_fps=" << (count - 1) * 1000000.0 / (*last_pts_us - *first_pts_us);
             }
             std::cout << '\n';
-            if (failed) { return 1; }
+            if (failed) {
+                return 1;
+            }
         }
         return 0;
     } catch (const std::exception& error) {

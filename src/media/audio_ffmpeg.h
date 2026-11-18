@@ -13,7 +13,9 @@ extern "C" {
 namespace rtsp::detail {
 
 inline void check_audio(int result, const char* operation) {
-    if (result >= 0) { return; }
+    if (result >= 0) {
+        return;
+    }
     char message[AV_ERROR_MAX_STRING_SIZE]{};
     av_strerror(result, message, sizeof(message));
     throw std::runtime_error(std::string(operation) + ": " + message);
@@ -24,7 +26,9 @@ inline std::shared_ptr<AVFrame> audio_buffer(int rate, int channels,
     auto frame = std::shared_ptr<AVFrame>(av_frame_alloc(), [](AVFrame* buffer) {
         av_frame_free(&buffer);
     });
-    if (!frame) { throw std::bad_alloc(); }
+    if (!frame) {
+        throw std::bad_alloc();
+    }
     frame->sample_rate = rate;
     frame->format = format;
     frame->nb_samples = samples;

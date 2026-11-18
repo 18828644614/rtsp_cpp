@@ -63,7 +63,9 @@ public:
         }
     }
     ~ComScope() {
-        if (SUCCEEDED(result_)) { CoUninitialize(); }
+        if (SUCCEEDED(result_)) {
+            CoUninitialize();
+        }
     }
 private:
     HRESULT result_;
@@ -117,7 +119,9 @@ struct CameraCapture::Impl {
 
     void deliver(CameraFrame& frame) {
         AVFrame* retained = av_frame_clone(decoded);
-        if (!retained) { throw std::bad_alloc(); }
+        if (!retained) {
+            throw std::bad_alloc();
+        }
         frame.buffer = std::shared_ptr<AVFrame>(retained, [](AVFrame* owned) {
             av_frame_free(&owned);
         });
@@ -135,7 +139,9 @@ struct CameraCapture::Impl {
             ? decoded->best_effort_timestamp : decoded->pts;
         if (timestamp != AV_NOPTS_VALUE) {
             frame.source_pts = timestamp;
-            if (!first_pts) { first_pts = timestamp; }
+            if (!first_pts) {
+                first_pts = timestamp;
+            }
             frame.relative_pts_us = av_rescale_q(timestamp - *first_pts,
                 {actual.time_base_num, actual.time_base_den}, {1, 1000000});
         }
@@ -144,9 +150,13 @@ struct CameraCapture::Impl {
 };
 
 CameraCapture::CameraCapture() : impl_(std::make_unique<Impl>()) {}
-CameraCapture::~CameraCapture() { close(); }
+CameraCapture::~CameraCapture() {
+    close();
+}
 
-std::string CameraCapture::ffmpeg_version() { return av_version_info(); }
+std::string CameraCapture::ffmpeg_version() {
+    return av_version_info();
+}
 
 // 枚举设备：先知道系统里有什么摄像头
 std::vector<CameraDeviceInfo> CameraCapture::enumerate_devices() {
@@ -169,7 +179,9 @@ std::vector<CameraDeviceInfo> CameraCapture::enumerate_devices() {
     while ((next = monikers->Next(1, moniker.ReleaseAndGetAddressOf(), nullptr)) == S_OK) {
         ComPtr<IPropertyBag> properties;
         if (FAILED(moniker->BindToStorage(nullptr, nullptr,
-            IID_PPV_ARGS(properties.GetAddressOf())))) { continue; }
+                                          IID_PPV_ARGS(properties.GetAddressOf())))) {
+            continue;
+        }
         VARIANT friendly;
         VariantInit(&friendly);
         const HRESULT named = properties->Read(L"FriendlyName", &friendly, nullptr);
@@ -183,19 +195,27 @@ std::vector<CameraDeviceInfo> CameraCapture::enumerate_devices() {
             throw;
         }
         VariantClear(&friendly);
-        if (description.empty()) { continue; }
+        if (description.empty()) {
+            continue;
+        }
         LPOLESTR display_name = nullptr;
         const HRESULT displayed = moniker->GetDisplayName(nullptr, nullptr, &display_name);
         std::string name = description;
         if (SUCCEEDED(displayed) && display_name) {
-            try { name = utf8(display_name, static_cast<int>(wcslen(display_name))); }
-            catch (...) { CoTaskMemFree(display_name); throw; }
+            try {
+                name = utf8(display_name, static_cast<int>(wcslen(display_name)));
+            } catch (...) {
+                CoTaskMemFree(display_name);
+                throw;
+            }
             CoTaskMemFree(display_name);
             std::replace(name.begin(), name.end(), ':', '_');
         }
         devices.push_back({name, description});
     }
-    if (FAILED(next)) { throw std::runtime_error("DirectShow device enumeration failed"); }
+    if (FAILED(next)) {
+        throw std::runtime_error("DirectShow device enumeration failed");
+    }
     return devices;
 }
 
@@ -213,7 +233,9 @@ void CameraCapture::open(const CameraConfig& config, const std::atomic<bool>* st
     impl_->first_pts.reset();
     avdevice_register_all();
     const AVInputFormat* device = av_find_input_format("dshow");
-    if (!device) { throw std::runtime_error("FFmpeg was built without DirectShow input"); }
+    if (!device) {
+        throw std::runtime_error("FFmpeg was built without DirectShow input");
+    }
     AVDictionary* options = nullptr;
     try {
         require_success(av_dict_set(&options, "video_size",
@@ -222,7 +244,9 @@ void CameraCapture::open(const CameraConfig& config, const std::atomic<bool>* st
             (std::to_string(config.fps_num) + "/" + std::to_string(config.fps_den)).c_str(), 0), "framerate");
         require_success(av_dict_set(&options, "pixel_format", config.pixel_format.c_str(), 0), "pixel_format");
         impl_->input = avformat_alloc_context();
-        if (!impl_->input) { throw std::bad_alloc(); }
+        if (!impl_->input) {
+            throw std::bad_alloc();
+        }
         impl_->input->flags |= AVFMT_FLAG_NONBLOCK;
         impl_->input->interrupt_callback = {Impl::interrupted, impl_.get()};
         require_success(avformat_open_input(&impl_->input,
@@ -237,7 +261,9 @@ void CameraCapture::open(const CameraConfig& config, const std::atomic<bool>* st
                 break;
             }
         }
-        if (impl_->stream_index < 0) { throw std::runtime_error("camera has no video stream"); }
+        if (impl_->stream_index < 0) {
+            throw std::runtime_error("camera has no video stream");
+        }
         AVStream* stream = impl_->input->streams[impl_->stream_index];
         const AVCodecParameters* parameters = stream->codecpar;
         if (parameters->codec_id != AV_CODEC_ID_RAWVIDEO) {
@@ -256,15 +282,21 @@ void CameraCapture::open(const CameraConfig& config, const std::atomic<bool>* st
             av_get_pix_fmt_name(pixel_format), avcodec_get_name(parameters->codec_id),
             stream->time_base.num, stream->time_base.den};
         const AVCodec* codec = avcodec_find_decoder(parameters->codec_id);
-        if (!codec) { throw std::runtime_error("rawvideo decoder unavailable"); }
+        if (!codec) {
+            throw std::runtime_error("rawvideo decoder unavailable");
+        }
         impl_->decoder = avcodec_alloc_context3(codec);
-        if (!impl_->decoder) { throw std::bad_alloc(); }
+        if (!impl_->decoder) {
+            throw std::bad_alloc();
+        }
         require_success(avcodec_parameters_to_context(impl_->decoder, parameters), "decoder parameters");
         impl_->decoder->pkt_timebase = stream->time_base;
         require_success(avcodec_open2(impl_->decoder, codec, nullptr), "open rawvideo decoder");
         impl_->packet = av_packet_alloc();
         impl_->decoded = av_frame_alloc();
-        if (!impl_->packet || !impl_->decoded) { throw std::bad_alloc(); }
+        if (!impl_->packet || !impl_->decoded) {
+            throw std::bad_alloc();
+        }
     } catch (...) {
         av_dict_free(&options);
         close();
@@ -283,13 +315,23 @@ CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds 
     // | `packet`  | 接收从摄像头输入读取到的数据包 |
     // | `decoded` | 接收从解码器取出的图像及其属性 |
     frame = {};
-    if (impl_->stopped()) { return CaptureResult::Stopped; }
-    if (impl_->failed) { return CaptureResult::Failed; }
-    if (!impl_->input) { return impl_->fail("camera is not open"); }
-    if (timeout.count() < 0) { throw std::invalid_argument("negative capture timeout"); }
+    if (impl_->stopped()) {
+        return CaptureResult::Stopped;
+    }
+    if (impl_->failed) {
+        return CaptureResult::Failed;
+    }
+    if (!impl_->input) {
+        return impl_->fail("camera is not open");
+    }
+    if (timeout.count() < 0) {
+        throw std::invalid_argument("negative capture timeout");
+    }
     const auto deadline = Clock::now() + timeout;
     for (;;) {
-        if (impl_->stopped()) { return CaptureResult::Stopped; }
+        if (impl_->stopped()) {
+            return CaptureResult::Stopped;
+        }
         // 使用这个解码器，尝试取出一张解码后的图像，把结果放进 impl_->decoded
         const int received = avcodec_receive_frame(impl_->decoder, impl_->decoded);
         if (received == 0) {
@@ -307,21 +349,31 @@ CaptureResult CameraCapture::read(CameraFrame& frame, std::chrono::milliseconds 
         }
         // 摄像头输入当前没有包可读取	短暂等待，再尝试
         if (result == AVERROR(EAGAIN)) {
-            if (Clock::now() >= deadline) { return CaptureResult::Timeout; }
+            if (Clock::now() >= deadline) {
+                return CaptureResult::Timeout;
+            }
             std::unique_lock<std::mutex> lock(impl_->wait_mutex);
             impl_->wake.wait_until(lock, std::min(deadline, Clock::now() + std::chrono::milliseconds(5)),
-                [this] { return impl_->stopped(); });
+                                   [this] {
+                                       return impl_->stopped();
+                                   });
             continue;
         }
-        if (result < 0) { return impl_->fail("read camera (device lost or input failed): " + error_text(result)); }
+        if (result < 0) {
+            return impl_->fail("read camera (device lost or input failed): " + error_text(result));
+        }
         if (impl_->packet->stream_index == impl_->stream_index) {
             const int sent = avcodec_send_packet(impl_->decoder, impl_->packet);
             av_packet_unref(impl_->packet);
-            if (sent < 0) { return impl_->fail("decode camera packet: " + error_text(sent)); }
+            if (sent < 0) {
+                return impl_->fail("decode camera packet: " + error_text(sent));
+            }
         } else {
             av_packet_unref(impl_->packet);
         }
-        if (Clock::now() >= deadline) { return CaptureResult::Timeout; }
+        if (Clock::now() >= deadline) {
+            return CaptureResult::Timeout;
+        }
     }
 }
 
@@ -343,7 +395,10 @@ void CameraCapture::close() {
     impl_->actual = {};
 }
 
-const CameraFormat& CameraCapture::format() const { return impl_->actual; }
-const std::string& CameraCapture::last_error() const { return impl_->error; }
-
+const CameraFormat& CameraCapture::format() const {
+    return impl_->actual;
+}
+const std::string& CameraCapture::last_error() const {
+    return impl_->error;
+}
 }

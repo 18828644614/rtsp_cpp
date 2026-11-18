@@ -16,12 +16,18 @@ namespace rtsp::app {
 inline CameraFrame synthetic_camera_frame(int width, int height, const std::string& format,
                                           int fps_num, int fps_den, std::int64_t index) {
     AVFrame* raw = av_frame_alloc();
-    if (!raw) { throw std::bad_alloc(); }
-    std::shared_ptr<AVFrame> owned(raw, [](AVFrame* frame) { av_frame_free(&frame); });
+    if (!raw) {
+        throw std::bad_alloc();
+    }
+    std::shared_ptr<AVFrame> owned(raw, [](AVFrame* frame) {
+        av_frame_free(&frame);
+    });
     raw->width = width;
     raw->height = height;
     raw->format = format == "yuyv422" ? AV_PIX_FMT_YUYV422 : AV_PIX_FMT_BGR24;
-    if (av_frame_get_buffer(raw, 64) < 0) { throw std::runtime_error("allocate synthetic frame failed"); }
+    if (av_frame_get_buffer(raw, 64) < 0) {
+        throw std::runtime_error("allocate synthetic frame failed");
+    }
     for (int y = 0; y < height; ++y) {
         auto* row = raw->data[0] + y * raw->linesize[0];
         for (int x = 0; x < width; ++x) {

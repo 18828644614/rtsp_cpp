@@ -32,7 +32,12 @@ struct MicrophoneFormat {
     int time_base_den = 1;
 };
 
-enum class MicrophoneReadResult { FrameReady, Timeout, Stopped, Failed };
+enum class MicrophoneReadResult {
+    FrameReady,
+    Timeout,
+    Stopped,
+    Failed
+};
 
 // open/read/close/查询由同一线程调用；仅 request_stop 允许从其他线程调用。
 class MicrophoneCapture {

@@ -22,7 +22,9 @@ bool AudioFrameQueue::push(AacAccessUnit frame) {
         throw std::invalid_argument("invalid AAC frame or audio queue byte limit too small");
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (closed_) { return false; }
+    if (closed_) {
+        return false;
+    }
     while (frames_.size() >= limits_.max_frames || frame.data.size() > limits_.max_bytes - bytes_) {
         discard_locked();
     }
@@ -40,28 +42,38 @@ AudioFrameRead AudioFrameQueue::read(AacAccessUnit& frame) {
         frames_.pop_front();
         return AudioFrameRead::FrameReady;
     }
-    if (closed_ && error_) { std::rethrow_exception(error_); }
+    if (closed_ && error_) {
+        std::rethrow_exception(error_);
+    }
     return closed_ ? AudioFrameRead::Ended : AudioFrameRead::Waiting;
 }
 
 void AudioFrameQueue::finish(std::exception_ptr error) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (closed_) { return; }
+    if (closed_) {
+        return;
+    }
     error_ = std::move(error);
     closed_ = true;
 }
 
 void AudioFrameQueue::discard_and_finish() {
     std::lock_guard<std::mutex> lock(mutex_);
-    while (!frames_.empty()) { discard_locked(); }
+    while (!frames_.empty()) {
+        discard_locked();
+    }
     error_ = nullptr;
     closed_ = true;
 }
 
 void AudioFrameQueue::resume_at_latest() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (closed_) { return; }
-    while (frames_.size() > 1) { discard_locked(); }
+    if (closed_) {
+        return;
+    }
+    while (frames_.size() > 1) {
+        discard_locked();
+    }
 }
 
 AudioFrameQueueStats AudioFrameQueue::stats() const {

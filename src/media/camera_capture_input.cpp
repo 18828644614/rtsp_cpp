@@ -8,7 +8,9 @@ class CaptureInput final : public CameraFrameInput {
 public:
     explicit CaptureInput(const CameraConfig& config) : config_(config) {}
     CameraInputResult read(CameraFrame& frame, std::chrono::milliseconds timeout) override {
-        if (stopping_.load()) { return CameraInputResult::Ended; }
+        if (stopping_.load()) {
+            return CameraInputResult::Ended;
+        }
         if (!opened_) {
             // DirectShow 的 COM 创建与释放保持在同一个工作线程。
             capture_.open(config_, &stopping_);
@@ -26,7 +28,10 @@ public:
         stopping_.store(true);
         capture_.request_stop();
     }
-    void close() noexcept override { capture_.close(); }
+    void close() noexcept override {
+        capture_.close();
+    }
+
 private:
     const CameraConfig config_;
     std::atomic<bool> stopping_{false};

@@ -24,7 +24,9 @@ struct AacEncoder::Impl {
     std::optional<std::int64_t> last_pts;
     bool flushed = false;
 
-    ~Impl() { close(); }
+    ~Impl() {
+        close();
+    }
 
     void close() noexcept {
         av_packet_free(&packet);
@@ -37,8 +39,12 @@ struct AacEncoder::Impl {
     void receive(std::vector<AacAccessUnit>& output, bool draining = false) {
         while (true) {
             const int result = avcodec_receive_packet(codec, packet);
-            if (result == AVERROR_EOF) { return; }
-            if (result == AVERROR(EAGAIN) && !draining) { return; }
+            if (result == AVERROR_EOF) {
+                return;
+            }
+            if (result == AVERROR(EAGAIN) && !draining) {
+                return;
+            }
             detail::check_audio(result, "receive AAC packet");
             if (packet->pts == AV_NOPTS_VALUE || (last_pts && packet->pts <= *last_pts) ||
                 packet->size <= 0 || packet->size > 8191 || packet->duration <= 0 ||
@@ -71,7 +77,9 @@ struct AacEncoder::Impl {
     }
 
     void append(const std::shared_ptr<AVFrame>& frame) {
-        if (!frame) { return; }
+        if (!frame) {
+            return;
+        }
         const int size = av_audio_fifo_size(fifo);
         if (frame->nb_samples > std::numeric_limits<int>::max() - size) {
             throw std::runtime_error("PCM FIFO capacity exceeded");
@@ -113,15 +121,21 @@ void AacEncoder::open(const AacEncoderConfig& config) {
     }
     try {
         const auto* encoder = avcodec_find_encoder_by_name("aac");
-        if (!encoder) { throw std::runtime_error("FFmpeg native AAC encoder unavailable"); }
+        if (!encoder) {
+            throw std::runtime_error("FFmpeg native AAC encoder unavailable");
+        }
         impl_->codec = avcodec_alloc_context3(encoder);
         impl_->packet = av_packet_alloc();
-        if (!impl_->codec || !impl_->packet) { throw std::bad_alloc(); }
+        if (!impl_->codec || !impl_->packet) {
+            throw std::bad_alloc();
+        }
         const void* formats = nullptr;
         int count = 0;
         detail::check_audio(avcodec_get_supported_config(impl_->codec, encoder,
             AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &formats, &count), "query AAC sample formats");
-        if (!formats || count <= 0) { throw std::runtime_error("AAC has no supported sample format"); }
+        if (!formats || count <= 0) {
+            throw std::runtime_error("AAC has no supported sample format");
+        }
         auto* codec = impl_->codec;
         codec->sample_fmt = static_cast<const AVSampleFormat*>(formats)[0];
         codec->sample_rate = 48000;
@@ -136,7 +150,9 @@ void AacEncoder::open(const AacEncoderConfig& config) {
             throw std::runtime_error("AAC requires 48 kHz mono, 1024 samples and AudioSpecificConfig");
         }
         impl_->fifo = av_audio_fifo_alloc(codec->sample_fmt, 1, codec->frame_size);
-        if (!impl_->fifo) { throw std::bad_alloc(); }
+        if (!impl_->fifo) {
+            throw std::bad_alloc();
+        }
         impl_->resampler.open(codec->sample_rate, av_get_sample_fmt_name(codec->sample_fmt));
         std::string config_hex;
         const char* hex = "0123456789abcdef";
@@ -145,8 +161,8 @@ void AacEncoder::open(const AacEncoderConfig& config) {
             config_hex += hex[codec->extradata[index] & 15];
         }
         impl_->track = {"audio", "trackID=1", 97, "MPEG4-GENERIC", 48000, 1,
-            "streamtype=5;profile-level-id=1;mode=AAC-hbr;config=" + config_hex +
-            ";SizeLength=13;IndexLength=3;IndexDeltaLength=3"};
+                        "streamtype=5;profile-level-id=1;mode=AAC-hbr;config=" + config_hex +
+                            ";SizeLength=13;IndexLength=3;IndexDeltaLength=3"};
         impl_->stats.initial_padding = codec->initial_padding;
     } catch (...) {
         close();
@@ -155,7 +171,9 @@ void AacEncoder::open(const AacEncoderConfig& config) {
 }
 
 std::vector<AacAccessUnit> AacEncoder::encode(const AudioFrame& input) {
-    if (!impl_->codec || impl_->flushed) { throw std::logic_error("AAC encoder is closed or flushed"); }
+    if (!impl_->codec || impl_->flushed) {
+        throw std::logic_error("AAC encoder is closed or flushed");
+    }
     if (!input.buffer || input.nb_samples != input.buffer->nb_samples ||
         input.sample_rate != input.buffer->sample_rate || input.channels != input.buffer->ch_layout.nb_channels) {
         throw std::invalid_argument("inconsistent AudioFrame PCM metadata");
@@ -168,11 +186,15 @@ std::vector<AacAccessUnit> AacEncoder::encode(const AudioFrame& input) {
 }
 
 std::vector<AacAccessUnit> AacEncoder::flush() {
-    if (!impl_->codec) { throw std::logic_error("AAC encoder is closed"); }
+    if (!impl_->codec) {
+        throw std::logic_error("AAC encoder is closed");
+    }
     if (impl_->flushed) { return {}; }
     impl_->flushed = true;
     std::vector<AacAccessUnit> output;
-    while (auto frame = impl_->resampler.flush()) { impl_->append(frame); }
+    while (auto frame = impl_->resampler.flush()) {
+        impl_->append(frame);
+    }
     impl_->encode_fifo(output, true);
     impl_->send(nullptr, output);
     impl_->stats.trailing_padding = impl_->codec->trailing_padding;
@@ -187,10 +209,13 @@ void AacEncoder::close() noexcept {
 }
 
 const MediaTrack& AacEncoder::track() const {
-    if (!impl_->codec) { throw std::logic_error("AAC encoder is closed"); }
+    if (!impl_->codec) {
+        throw std::logic_error("AAC encoder is closed");
+    }
     return impl_->track;
 }
 
-AacEncoderStats AacEncoder::stats() const { return impl_->stats; }
-
+AacEncoderStats AacEncoder::stats() const {
+    return impl_->stats;
+}
 }

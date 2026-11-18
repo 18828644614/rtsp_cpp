@@ -11,7 +11,11 @@
 
 namespace rtsp {
 
-enum class AudioInputResult { FrameReady, Waiting, Ended };
+enum class AudioInputResult {
+    FrameReady,
+    Waiting,
+    Ended
+};
 
 class AudioFrameInput {
 public:
@@ -39,7 +43,9 @@ public:
     bool read(AacAccessUnit& frame) override;
     bool ended() const override;
     const MediaTrack& track() const override;
-    bool is_live() const override { return true; }
+    bool is_live() const override {
+        return true;
+    }
     void resume() override;
     void stop() override;
     AudioFrameQueueStats queue_stats() const;

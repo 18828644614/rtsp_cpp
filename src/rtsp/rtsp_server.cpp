@@ -141,11 +141,17 @@ void RtspServer::run(const std::atomic<bool>* stop_requested) {
         listener_.close();
         media_session_->stop();
         // 停止接受和生产后继续驱动同一事件循环，排空最终 RTCP；每连接有绝对收尾期限。
-        for (auto& connection : connections_) { connection->start_shutdown(); }
+        for (auto& connection : connections_) {
+            connection->start_shutdown();
+        }
         while (!connections_.empty()) {
-            for (auto& connection : connections_) { connection->check_timeout(MediaSession::Clock::now()); }
+            for (auto& connection : connections_) {
+                connection->check_timeout(MediaSession::Clock::now());
+            }
             reap_finished_connections();
-            if (connections_.empty()) { break; }
+            if (connections_.empty()) {
+                break;
+            }
             event_loop_.clear();
             for (const auto& connection : connections_) {
                 event_loop_.watch(connection->native_handle(), false, connection->wants_write());
@@ -181,7 +187,10 @@ std::size_t RtspServer::connection_count() const {
 
 void RtspServer::reap_finished_connections() {
     connections_.erase(std::remove_if(connections_.begin(), connections_.end(),
-        [](const auto& connection) { return connection->finished(); }), connections_.end());
+                                      [](const auto& connection) {
+                                          return connection->finished();
+                                      }),
+                       connections_.end());
     connection_count_.store(connections_.size());
 }
 

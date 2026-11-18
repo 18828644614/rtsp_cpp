@@ -35,7 +35,12 @@ struct CameraFormat {
     int time_base_den = 1;
 };
 
-enum class CaptureResult { FrameReady, Timeout, Stopped, Failed };
+enum class CaptureResult {
+    FrameReady,
+    Timeout,
+    Stopped,
+    Failed
+};
 
 class CameraCapture {
 public:

@@ -35,7 +35,9 @@ CameraVideoSource::CameraVideoSource(std::unique_ptr<CameraFrameInput> input,
             startup_wake_.wait_until(lock, std::min(deadline, now + std::chrono::milliseconds(20)));
         }
         if (!ready_) {
-            if (startup_error_) { std::rethrow_exception(startup_error_); }
+            if (startup_error_) {
+                std::rethrow_exception(startup_error_);
+            }
             throw std::runtime_error("camera ended before IDR/SPS/PPS became available");
         }
     } catch (...) {
@@ -44,11 +46,15 @@ CameraVideoSource::CameraVideoSource(std::unique_ptr<CameraFrameInput> input,
     }
 }
 
-CameraVideoSource::~CameraVideoSource() { stop(); }
+CameraVideoSource::~CameraVideoSource() {
+    stop();
+}
 
 void CameraVideoSource::publish(std::vector<H264AccessUnit> frames, const H264Encoder& encoder) {
     for (auto& frame : frames) {
-        if (stopping_.load()) { return; }
+        if (stopping_.load()) {
+            return;
+        }
         // 是否为关键帧
         const bool idr = frame.is_keyframe;
         if (!queue_.push(std::move(frame))) {
@@ -80,8 +86,12 @@ void CameraVideoSource::produce() noexcept {
             CameraFrame frame;
             const auto result = input_->read(frame, config_.read_timeout);
 
-            if (stopping_.load()) { break; }
-            if (result == CameraInputResult::Waiting) { continue; }
+            if (stopping_.load()) {
+                break;
+            }
+            if (result == CameraInputResult::Waiting) {
+                continue;
+            }
             if (result == CameraInputResult::Ended) {
                 publish(encoder.flush(), encoder);
                 break;
@@ -103,19 +113,31 @@ void CameraVideoSource::produce() noexcept {
 
 bool CameraVideoSource::read(H264AccessUnit& frame) {
     const auto result = queue_.read(frame);
-    if (result == VideoFrameRead::Ended) { ended_ = true; }
+    if (result == VideoFrameRead::Ended) {
+        ended_ = true;
+    }
     return result == VideoFrameRead::FrameReady;
 }
 
-bool CameraVideoSource::ended() const { return ended_; }
-const MediaTrack& CameraVideoSource::track() const { return track_; }
-void CameraVideoSource::resume() { queue_.resume_at_latest_idr(); }
-VideoFrameQueueStats CameraVideoSource::queue_stats() const { return queue_.stats(); }
+bool CameraVideoSource::ended() const {
+    return ended_;
+}
+const MediaTrack& CameraVideoSource::track() const {
+    return track_;
+}
+void CameraVideoSource::resume() {
+    queue_.resume_at_latest_idr();
+}
+VideoFrameQueueStats CameraVideoSource::queue_stats() const {
+    return queue_.stats();
+}
 
 void CameraVideoSource::stop() {
     stopping_.store(true);
     input_->request_stop();
-    if (worker_.joinable()) { worker_.join(); }
+    if (worker_.joinable()) {
+        worker_.join();
+    }
     queue_.discard_and_finish();
     ended_ = true;
 }

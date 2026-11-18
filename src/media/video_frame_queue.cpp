@@ -7,7 +7,9 @@ namespace rtsp {
 namespace {
 std::size_t frame_bytes(const H264AccessUnit& frame) {
     std::size_t bytes = 0;
-    for (const auto& nalu : frame.nalus) { bytes += nalu.size(); }
+    for (const auto& nalu : frame.nalus) {
+        bytes += nalu.size();
+    }
     return bytes;
 }
 }
@@ -30,7 +32,9 @@ bool VideoFrameQueue::push(H264AccessUnit frame) {
         throw std::invalid_argument("video queue requires a nonempty access unit");
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (closed_) { return false; }
+    if (closed_) {
+        return false;
+    }
     if (bytes > limits_.max_bytes || frames_.size() >= limits_.max_frames
         || bytes > limits_.max_bytes - bytes_) {
         // 丢失任何参考帧后，不能把依赖它的 P 帧继续交给解码器。
@@ -56,13 +60,17 @@ VideoFrameRead VideoFrameQueue::read(H264AccessUnit& frame) {
         frames_.pop_front();
         return VideoFrameRead::FrameReady;
     }
-    if (closed_ && error_) { std::rethrow_exception(error_); }
+    if (closed_ && error_) {
+        std::rethrow_exception(error_);
+    }
     return closed_ ? VideoFrameRead::Ended : VideoFrameRead::Waiting;
 }
 
 void VideoFrameQueue::finish(std::exception_ptr error) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (closed_) { return; }
+    if (closed_) {
+        return;
+    }
     error_ = std::move(error);
     closed_ = true;
 }
@@ -78,7 +86,10 @@ void VideoFrameQueue::resume_at_latest_idr() {
     std::lock_guard<std::mutex> lock(mutex_);
     std::size_t keep = frames_.size();
     for (std::size_t i = frames_.size(); i > 0; --i) {
-        if (frames_[i - 1].is_keyframe) { keep = i - 1; break; }
+        if (frames_[i - 1].is_keyframe) {
+            keep = i - 1;
+            break;
+        }
     }
     for (std::size_t i = 0; i < keep; ++i) {
         bytes_ -= frame_bytes(frames_.front());

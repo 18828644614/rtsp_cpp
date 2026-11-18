@@ -18,22 +18,34 @@ extern "C" {
 namespace {
 
 void check(bool valid, const char* message) {
-    if (!valid) { throw std::runtime_error(message); }
+    if (!valid) {
+        throw std::runtime_error(message);
+    }
 }
 
 template<class Exception = std::invalid_argument, class Action>
 void rejects(Action action) {
     bool rejected = false;
-    try { action(); } catch (const Exception&) { rejected = true; }
+    try {
+        action();
+    } catch (const Exception&) {
+        rejected = true;
+    }
     check(rejected, "expected operation to reject invalid input/state");
 }
 
-int grey(int x, int y, int index) { return 40 + index * 2 + (x / 16 + y / 16) % 15; }
+int grey(int x, int y, int index) {
+    return 40 + index * 2 + (x / 16 + y / 16) % 15;
+}
 
 rtsp::CameraFrame make_frame(const rtsp::H264EncoderConfig& config, int index) {
     auto* raw = av_frame_alloc();
-    if (!raw) { throw std::bad_alloc(); }
-    std::shared_ptr<AVFrame> owned(raw, [](AVFrame* frame) { av_frame_free(&frame); });
+    if (!raw) {
+        throw std::bad_alloc();
+    }
+    std::shared_ptr<AVFrame> owned(raw, [](AVFrame* frame) {
+        av_frame_free(&frame);
+    });
     raw->width = config.width;
     raw->height = config.height;
     raw->format = config.pixel_format == "yuyv422" ? AV_PIX_FMT_YUYV422 : AV_PIX_FMT_BGR24;
@@ -91,13 +103,21 @@ public:
             packet_ = av_packet_alloc();
             frame_ = av_frame_alloc();
             check(packet_ && frame_, "allocate decoder buffers");
-        } catch (...) { release(); throw; }
+        } catch (...) {
+            release();
+            throw;
+        }
     }
-    ~Decoder() { release(); }
+    ~Decoder() {
+        release();
+    }
 
     void submit(const rtsp::H264AccessUnit& unit, int source_index) {
         std::string bytes;
-        for (const auto& nalu : unit.nalus) { bytes.append("\0\0\0\1", 4); bytes += nalu; }
+        for (const auto& nalu : unit.nalus) {
+            bytes.append("\0\0\0\1", 4);
+            bytes += nalu;
+        }
         check(av_new_packet(packet_, static_cast<int>(bytes.size())) >= 0, "allocate decoder packet");
         std::copy(bytes.begin(), bytes.end(), packet_->data);
         packet_->pts = packet_->dts = static_cast<std::int64_t>(unit.pts);
@@ -124,8 +144,12 @@ private:
     bool receive() {
         for (;;) {
             const int result = avcodec_receive_frame(context_, frame_);
-            if (result == AVERROR(EAGAIN)) { return false; }
-            if (result == AVERROR_EOF) { return true; }
+            if (result == AVERROR(EAGAIN)) {
+                return false;
+            }
+            if (result == AVERROR_EOF) {
+                return true;
+            }
             check(result >= 0, "decode encoded picture failed");
             check(frame_->width == config_.width && frame_->height == config_.height,
                 "decoded dimensions differ from input");
@@ -175,29 +199,53 @@ private:
 };
 
 void append(std::vector<rtsp::H264AccessUnit>& output, std::vector<rtsp::H264AccessUnit> units) {
-    for (auto& unit : units) { output.push_back(std::move(unit)); }
+    for (auto& unit : units) {
+        output.push_back(std::move(unit));
+    }
 }
 
 void validation_tests() {
     rtsp::H264Encoder encoder;
     rejects<std::logic_error>([&] { encoder.encode({}); });
-    rejects<std::logic_error>([&] { encoder.flush(); });
+    rejects<std::logic_error>([&] {
+        encoder.flush();
+    });
     auto config = small_config();
     auto bad = config;
     bad.width = 319;
-    rejects([&] { encoder.open(bad); });
-    bad = config; bad.height = 0;
-    rejects([&] { encoder.open(bad); });
-    bad = config; bad.fps_den = 0;
-    rejects([&] { encoder.open(bad); });
-    bad = config; bad.fps_num = 241;
-    rejects([&] { encoder.open(bad); });
-    bad = config; bad.bitrate = 0;
-    rejects([&] { encoder.open(bad); });
-    bad = config; bad.gop = 0;
-    rejects([&] { encoder.open(bad); });
-    bad = config; bad.pixel_format = "mjpeg";
-    rejects([&] { encoder.open(bad); });
+    rejects([&] {
+        encoder.open(bad);
+    });
+    bad = config;
+    bad.height = 0;
+    rejects([&] {
+        encoder.open(bad);
+    });
+    bad = config;
+    bad.fps_den = 0;
+    rejects([&] {
+        encoder.open(bad);
+    });
+    bad = config;
+    bad.fps_num = 241;
+    rejects([&] {
+        encoder.open(bad);
+    });
+    bad = config;
+    bad.bitrate = 0;
+    rejects([&] {
+        encoder.open(bad);
+    });
+    bad = config;
+    bad.gop = 0;
+    rejects([&] {
+        encoder.open(bad);
+    });
+    bad = config;
+    bad.pixel_format = "mjpeg";
+    rejects([&] {
+        encoder.open(bad);
+    });
     for (int run = 0; run < 3; ++run) {
         encoder.open(config);
         check(encoder.sps().empty() && encoder.pps().empty(), "reopen retained stale parameter sets");
@@ -205,29 +253,51 @@ void validation_tests() {
         auto input = make_frame(config, 0);
         auto wrong = input;
         wrong.width += 2;
-        rejects([&] { encoder.encode(wrong); });
-        wrong = input; wrong.pixel_format = "bgr24";
-        rejects([&] { encoder.encode(wrong); });
-        wrong = input; wrong.time_base_den = 0;
-        rejects([&] { encoder.encode(wrong); });
-        wrong = input; wrong.source_duration = -1;
-        rejects([&] { encoder.encode(wrong); });
-        wrong = input; wrong.source_duration = std::numeric_limits<std::int64_t>::max();
-        rejects([&] { encoder.encode(wrong); });
+        rejects([&] {
+            encoder.encode(wrong);
+        });
+        wrong = input;
+        wrong.pixel_format = "bgr24";
+        rejects([&] {
+            encoder.encode(wrong);
+        });
+        wrong = input;
+        wrong.time_base_den = 0;
+        rejects([&] {
+            encoder.encode(wrong);
+        });
+        wrong = input;
+        wrong.source_duration = -1;
+        rejects([&] {
+            encoder.encode(wrong);
+        });
+        wrong = input;
+        wrong.source_duration = std::numeric_limits<std::int64_t>::max();
+        rejects([&] {
+            encoder.encode(wrong);
+        });
         std::vector<rtsp::H264AccessUnit> units;
         append(units, encoder.encode(input));
         const auto saved = units;
-        rejects([&] { encoder.encode(input); }); // 重复 PTS，不破坏编码器，后续合法帧仍能编码。
+        rejects([&] {
+            encoder.encode(input);
+        }); // 重复 PTS，不破坏编码器，后续合法帧仍能编码。
         auto next = make_frame(config, 1);
-        wrong = next; wrong.time_base_num *= 2;
-        rejects([&] { encoder.encode(wrong); });
+        wrong = next;
+        wrong.time_base_num *= 2;
+        rejects([&] {
+            encoder.encode(wrong);
+        });
         append(units, encoder.encode(next));
         append(units, encoder.flush());
         check(units.size() == 2 && !saved.empty() && saved[0].nalus == units[0].nalus,
             "output memory did not survive later encoding/flush");
         check(encoder.flush().empty(), "repeated flush must be empty");
-        rejects<std::logic_error>([&] { encoder.encode(next); });
-        encoder.close(); encoder.close();
+        rejects<std::logic_error>([&] {
+            encoder.encode(next);
+        });
+        encoder.close();
+        encoder.close();
         check(encoder.sps().empty() && encoder.timestamp_fallbacks() == 0, "close did not clear encoder state");
         Decoder decoder(config);
         decoder.submit(units[0], 0);
@@ -239,10 +309,14 @@ void validation_tests() {
     auto short_stride = make_frame(config, 0);
     encoder.open(config);
     const_cast<AVFrame*>(short_stride.buffer.get())->linesize[0] = 1;
-    rejects([&] { encoder.encode(short_stride); });
+    rejects([&] {
+        encoder.encode(short_stride);
+    });
     auto wrong_range = make_frame(config, 0);
     const_cast<AVFrame*>(wrong_range.buffer.get())->color_range = AVCOL_RANGE_JPEG;
-    rejects([&] { encoder.encode(wrong_range); });
+    rejects([&] {
+        encoder.encode(wrong_range);
+    });
 }
 
 void stream_test(const std::string& format, int fps_num, int fps_den) {
@@ -277,12 +351,18 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
             "AU PTS used a fixed 25 fps clock or accumulated rounding error");
         check(unit.duration == static_cast<std::uint32_t>(av_rescale_q(1, {fps_den, fps_num}, {1, 90000})),
             "AU duration does not match source duration");
-        int aud = 0; int slices = 0; bool sps = false; bool pps = false; bool idr = false;
+        int aud = 0;
+        int slices = 0;
+        bool sps = false;
+        bool pps = false;
+        bool idr = false;
         for (const auto& nalu : unit.nalus) {
             const auto type = static_cast<unsigned char>(nalu[0]) & 0x1f;
             aud += type == 9;
             slices += type == 1 || type == 5;
-            idr = idr || type == 5; sps = sps || type == 7; pps = pps || type == 8;
+            idr = idr || type == 5;
+            sps = sps || type == 7;
+            pps = pps || type == 8;
             writer.write(nalu);
         }
         check(aud == 1 && (static_cast<unsigned char>(unit.nalus.front()[0]) & 0x1f) == 9 && slices > 0,
@@ -297,7 +377,9 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
     check(multiple_slices, "test did not exercise an access unit with multiple slices");
     // 中途从第二个 IDR 启动一个全新解码器，验证重复参数集确实可用。
     Decoder late_decoder(config);
-    for (int index = config.gop; index < frames; ++index) { late_decoder.submit(units[index], index); }
+    for (int index = config.gop; index < frames; ++index) {
+        late_decoder.submit(units[index], index);
+    }
     late_decoder.finish(frames - config.gop);
     rtsp::H264FileReader reader;
     reader.open(path);
@@ -319,27 +401,35 @@ void timing_tests() {
     for (int index = 0; index < 4; ++index) {
         auto frame = make_frame(config, index);
         frame.source_pts = -1000 + index * 333333LL + (index >= 2 ? 333333 : 0);
-        frame.time_base_num = 1; frame.time_base_den = 10000000;
+        frame.time_base_num = 1;
+        frame.time_base_den = 10000000;
         frame.source_duration = 333333;
         append(units, encoder.encode(frame));
     }
     append(units, encoder.flush());
     check(units.size() == 4 && units[0].pts == 0 && units[1].pts == 3000 && units[2].pts == 9000,
         "encoder did not preserve source timing gaps/negative origin");
-    encoder.open(config); units.clear();
+    encoder.open(config);
+    units.clear();
     for (int index = 0; index < 4; ++index) {
         auto frame = make_frame(config, index);
-        if (index == 1) { frame.source_pts.reset(); }
+        if (index == 1) {
+            frame.source_pts.reset();
+        }
         append(units, encoder.encode(frame));
     }
     append(units, encoder.flush());
     check(encoder.timestamp_fallbacks() == 1 && units[1].pts == 3000 && units[2].pts == 6000,
         "intermittent missing timestamp fallback is incorrect");
-    config.fps_num = 24000; config.fps_den = 1001;
-    encoder.open(config); units.clear();
+    config.fps_num = 24000;
+    config.fps_den = 1001;
+    encoder.open(config);
+    units.clear();
     for (int index = 0; index < 10; ++index) {
         auto frame = make_frame(config, index);
-        if (index == 0 || index % 2 == 0) { frame.source_pts.reset(); }
+        if (index == 0 || index % 2 == 0) {
+            frame.source_pts.reset();
+        }
         frame.source_duration = 0;
         append(units, encoder.encode(frame));
     }
@@ -357,7 +447,9 @@ void timing_tests() {
     frame.source_pts = std::numeric_limits<std::int64_t>::min();
     encoder.encode(frame);
     frame.source_pts = std::numeric_limits<std::int64_t>::max();
-    rejects([&] { encoder.encode(frame); });
+    rejects([&] {
+        encoder.encode(frame);
+    });
     encoder.flush();
 }
 

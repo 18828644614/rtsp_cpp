@@ -35,7 +35,8 @@ void test_reader_and_payload() {
     check(track.media_type == "audio" && track.encoding == "MPEG4-GENERIC"
               && track.clock_rate == 48000 && track.channels == 2, "wrong ADTS configuration");
     check(track.fmtp == "streamtype=5;profile-level-id=1;mode=AAC-hbr;config=1190;"
-                       "SizeLength=13;IndexLength=3;IndexDeltaLength=3", "wrong AAC SDP config");
+                        "SizeLength=13;IndexLength=3;IndexDeltaLength=3",
+          "wrong AAC SDP config");
     rtsp::AacAccessUnit frame;
     check(reader.read(frame) && frame.pts == 0 && frame.duration == 1024
               && frame.data == std::string("\x11\x22\x33", 3), "ADTS header was not removed");

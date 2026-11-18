@@ -14,7 +14,11 @@ struct VideoFrameQueueLimits {
     std::size_t max_bytes = 8 * 1024 * 1024;
 };
 
-enum class VideoFrameRead { FrameReady, Waiting, Ended };
+enum class VideoFrameRead {
+    FrameReady,
+    Waiting,
+    Ended
+};
 
 struct VideoFrameQueueStats {
     std::size_t frames = 0;

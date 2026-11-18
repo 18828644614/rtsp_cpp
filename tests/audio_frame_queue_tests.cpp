@@ -5,7 +5,11 @@
 #include <limits>
 
 namespace {
-void check(bool ok) { if (!ok) { throw std::runtime_error("audio queue or signed time mismatch"); } }
+void check(bool ok) {
+    if (!ok) {
+        throw std::runtime_error("audio queue or signed time mismatch");
+    }
+}
 rtsp::AacAccessUnit frame(std::int64_t pts, std::size_t bytes = 4) {
     return {std::string(bytes, 'a'), pts, 1024};
 }
@@ -37,7 +41,11 @@ int main() {
         failed.finish(std::make_exception_ptr(std::runtime_error("input failed")));
         check(failed.read(out) == rtsp::AudioFrameRead::FrameReady && out.pts == -1024);
         bool raised = false;
-        try { failed.read(out); } catch (const std::runtime_error&) { raised = true; }
+        try {
+            failed.read(out);
+        } catch (const std::runtime_error&) {
+            raised = true;
+        }
         check(raised);
         failed.discard_and_finish();
         check(failed.read(out) == rtsp::AudioFrameRead::Ended);
@@ -51,5 +59,8 @@ int main() {
         check(rtsp::media_pts_less(maximum - 1, 48000, maximum, 48000));
         std::cout << "PASS: bounded audio queue, preserved PTS, EOF/error draining and signed time\n";
         return 0;
-    } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
 }
