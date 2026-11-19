@@ -11,36 +11,20 @@
 
 namespace rtsp {
 
-RtspServer::RtspServer(std::string address, std::uint16_t port, std::string video_path,
-                       std::string audio_path, RuntimeOptions options)
-    : address_(std::move(address)), port_(port), options_(options),
-      media_session_(std::make_shared<MediaSession>(video_path, audio_path)) {}
-
-RtspServer::RtspServer(std::string address, std::uint16_t port,
-                       std::unique_ptr<VideoSource> video_source, RuntimeOptions options)
-    : address_(std::move(address)), port_(port), options_(options),
-      media_session_(std::make_shared<MediaSession>(std::move(video_source))) {}
-
-RtspServer::~RtspServer() {
-    stop();
-    // 调用者须先等待 run() 返回；对象不能在运行线程仍访问它时析构。
-    close_connections();
-}
-
-RtspServer::RtspServer(std::string address, std::uint16_t port,
-                       std::unique_ptr<VideoSource> video_source,
-                       std::unique_ptr<AudioSource> audio_source, RuntimeOptions options)
-    : RtspServer(std::move(address), port, std::move(video_source), std::move(audio_source),
-                 nullptr, std::chrono::milliseconds{150}, options) {}
-
 RtspServer::RtspServer(std::string address, std::uint16_t port,
                        std::unique_ptr<VideoSource> video_source,
                        std::unique_ptr<AudioSource> audio_source,
-                       std::shared_ptr<const CaptureTimeline> timeline,
+                       CaptureTimeline timeline,
                        std::chrono::milliseconds send_buffer, RuntimeOptions options)
     : address_(std::move(address)), port_(port), options_(options),
-      media_session_(std::make_shared<MediaSession>(std::move(video_source), std::move(audio_source),
-                                                    std::move(timeline), send_buffer)) {}
+      media_session_(std::make_unique<MediaSession>(std::move(video_source), std::move(audio_source),
+                                                   timeline, send_buffer)) {}
+
+RtspServer::~RtspServer() {
+    stop();
+    // 调用者须先等待 run() 返回，再销毁服务器。
+    close_connections();
+}
 
 void RtspServer::run(const std::atomic<bool>* stop_requested) {
     // 把 running_ 设置为 true
@@ -107,7 +91,7 @@ void RtspServer::run(const std::atomic<bool>* stop_requested) {
                 if (event.socket == listener_.native_handle()) {
                     // 限制每轮 accept 数量，避免连接洪峰挤占已有连接。
                     for (int accepted = 0; accepted < 16; ++accepted) {
-                        auto connection = std::make_unique<RtspServerConnection>(media_session_, options_);
+                        auto connection = std::make_unique<RtspServerConnection>(*media_session_, options_);
                         if (!connection->accept_from(listener_)) {
                             break;
                         }

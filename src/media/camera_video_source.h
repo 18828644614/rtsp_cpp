@@ -36,7 +36,7 @@ struct CameraVideoSourceConfig {
     VideoFrameQueueLimits queue;
     std::chrono::milliseconds startup_timeout{5000};
     std::chrono::milliseconds read_timeout{100};
-    std::shared_ptr<const CaptureTimeline> timeline;
+    CaptureTimeline timeline;
     std::chrono::milliseconds no_data_timeout{5000};
 };
 
@@ -53,9 +53,6 @@ public:
     bool read(H264AccessUnit& frame) override;
     bool ended() const override;
     const MediaTrack& track() const override;
-    bool is_live() const override {
-        return true;
-    }
     void check_health() const override;
     void resume() override;
     void stop() override;

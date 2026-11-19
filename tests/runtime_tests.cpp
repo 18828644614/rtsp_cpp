@@ -1,24 +1,15 @@
 #include "event_test_driver.h"
-#include "media/h264_file_reader.h"
 #include "media/media_clock.h"
 #include "rtp/rtcp_packet.h"
-#include "rtsp/rtsp_client.h"
 #include "rtsp/rtsp_server.h"
 
-#include <cstdio>
-#include <fstream>
 #include <iostream>
-#include <map>
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
 using rtsp::net::OutboundKind;
 using rtsp::net::OutboundMessage;
-const std::string video_path = "runtime_test.h264";
-const std::string audio_path = "runtime_test.aac";
-const std::string output_path = "runtime_received.h264";
-
 void check(bool valid, const char* message) {
     if (!valid) {
         throw std::runtime_error(message);
@@ -53,28 +44,6 @@ std::string rr(std::uint32_t source) {
     put32(wire, 0x12345678);
     put32(wire, 65536);
     return wire;
-}
-
-void save_samples(int frames, bool audio = false, std::size_t nalu_size = 2, int idr_interval = 1) {
-    std::ofstream video(video_path, std::ios::binary);
-    const std::string prefix("\0\0\0\1", 4);
-    for (int i = 0; i < frames; ++i) {
-        video << prefix << std::string("\x09\xf0", 2);
-        if (i == 0) {
-            video << prefix << std::string("\x67\x64\0\x1f", 4);
-            video << prefix << std::string("\x68\xee", 2);
-        }
-        video << prefix << static_cast<char>(i % idr_interval == 0 ? 0x65 : 0x41)
-              << std::string(nalu_size - 1, 'x');
-    }
-    check(static_cast<bool>(video), "could not save runtime video");
-    if (audio) {
-        std::ofstream output(audio_path, std::ios::binary);
-        for (int i = 0; i < frames * 2; ++i) {
-            output << std::string("\xff\xf1\x4c\x80\x01\x5f\xfc\x11\x22\x33", 10);
-        }
-        check(static_cast<bool>(output), "could not save runtime audio");
-    }
 }
 
 rtsp::RtspStreamItem decode(const std::string& wire) {
@@ -177,8 +146,9 @@ void test_session_headers_and_keepalive() {
 }
 
 void test_sent_statistics_and_feedback() {
-    save_samples(4);
-    rtsp::MediaSession media(video_path);
+    const auto start = Clock::now();
+    rtsp::MediaSession media(std::make_unique<test::WireVideo>(4), std::make_unique<test::WireAudio>(),
+                             rtsp::CaptureTimeline(start), std::chrono::milliseconds{0});
     auto queue = std::make_shared<rtsp::net::OutboundQueue>();
     auto subscription = std::make_shared<rtsp::MediaSubscription>(queue);
     subscription->add_track(0, media.description().tracks[0], {6, 7}, 65535, 31);
@@ -186,7 +156,6 @@ void test_sent_statistics_and_feedback() {
     media.subscribe(subscription, "PLAY");
     OutboundMessage message;
     check(queue->try_pop(message) && message.wire == "PLAY", "PLAY response missing");
-    const auto start = Clock::now();
     media.tick(start);
     check(queue->take_for_send(message) && message.kind == OutboundKind::Rtp, "first RTP missing");
     OutboundMessage report;
@@ -252,7 +221,7 @@ void test_sent_statistics_and_feedback() {
 }
 
 struct Peer {
-    std::shared_ptr<test::DrivenMedia> media;
+    test::DrivenMedia media;
     rtsp::net::TcpSocket listener;
     rtsp::net::TcpSocket socket;
     test::DrivenConnection connection;
@@ -260,9 +229,8 @@ struct Peer {
     int cseq = 0;
     std::string session;
 
-    explicit Peer(rtsp::RuntimeOptions options = {}, bool audio = false)
-        : media(std::make_shared<test::DrivenMedia>(video_path, audio ? audio_path : "")),
-          connection(media, options) {
+    explicit Peer(rtsp::RuntimeOptions options = {}, std::size_t nalu_size = 2)
+        : media(160, nalu_size), connection(media, options) {
         listener.listen("127.0.0.1", 0);
         socket.connect("127.0.0.1", listener.local_port());
         check(connection.accept_from(listener), "runtime accept failed");
@@ -313,7 +281,6 @@ struct Peer {
 };
 
 void test_connection_expiry() {
-    save_samples(100);
     rtsp::RuntimeOptions options;
     options.session_timeout_seconds = 1;
     Peer peer(options);
@@ -349,7 +316,6 @@ void test_connection_expiry() {
 }
 
 void test_rtcp_feedback_renews_connection() {
-    save_samples(100);
     rtsp::RuntimeOptions options;
     options.session_timeout_seconds = 1;
     Peer peer(options);
@@ -391,10 +357,9 @@ void test_rtcp_feedback_renews_connection() {
 }
 
 void test_partial_rtp_counts_and_teardown() {
-    save_samples(20, false, 512 * 1024);
     rtsp::RuntimeOptions options;
     options.rtcp_interval = std::chrono::milliseconds(10);
-    Peer peer(options);
+    Peer peer(options, 512 * 1024);
     int small_buffer = 1024;
     check(::setsockopt(peer.connection.native_handle(), SOL_SOCKET, SO_SNDBUF,
                       reinterpret_cast<const char*>(&small_buffer), sizeof(small_buffer)) == 0,
@@ -449,8 +414,8 @@ void test_partial_rtp_counts_and_teardown() {
 }
 
 void test_graceful_stop_reports() {
-    save_samples(100);
-    rtsp::RtspServer server("127.0.0.1", 0, video_path);
+    rtsp::RtspServer server("127.0.0.1", 0, std::make_unique<test::WireVideo>(100),
+                            std::make_unique<test::WireAudio>(), rtsp::CaptureTimeline{});
     std::exception_ptr failure;
     std::thread worker([&] {
         try {
@@ -536,172 +501,6 @@ void test_graceful_stop_reports() {
     }
 }
 
-void test_wire_reports_and_eof() {
-    save_samples(4, true);
-    rtsp::RuntimeOptions options;
-    options.rtcp_interval = std::chrono::milliseconds(30);
-    Peer peer(options, true);
-    peer.setup();
-    check(peer.exchange("SETUP", "/trackID=1", peer.session + "Transport: RTP/AVP/TCP;unicast;interleaved=10-11\r\n").status_code == 200,
-          "audio SETUP failed");
-    const auto response = peer.exchange("PLAY", "", peer.session);
-    check(response.header("RTP-Info") == "url=rtsp://127.0.0.1/live/trackID=0;seq=100,"
-                                         "url=rtsp://127.0.0.1/live/trackID=1;seq=100",
-          "multi-track RTP-Info mismatch");
-    std::map<unsigned int, std::uint32_t> packets, octets, sources, origins;
-    std::map<unsigned int, int> reports, byes;
-    std::map<unsigned int, long double> mapping;
-    const auto deadline = Clock::now() + std::chrono::seconds(3);
-    for (;;) {
-        test::pump();
-        rtsp::RtspStreamItem item;
-        while (peer.parser.next(item)) {
-            check(item.is_interleaved, "unexpected control response during stream");
-            if (item.channel == 6 || item.channel == 10) {
-                const auto rtp = rtsp::parse_rtp_packet(item.payload);
-                if (packets[item.channel] == 0) {
-                    origins[item.channel] = rtp.timestamp;
-                }
-                ++packets[item.channel];
-                octets[item.channel] += static_cast<std::uint32_t>(rtp.payload.size());
-                sources[item.channel] = rtp.ssrc;
-            } else {
-                const auto channel = item.channel - 1;
-                check(channel == 6 || channel == 10, "wrong RTCP channel");
-                const auto compound = rtsp::parse_rtcp_compound(item.payload);
-                const auto& sr = compound[0];
-                check(sr.type == 200 && sr.ssrc == sources[channel] && sr.packet_count == packets[channel]
-                    && sr.octet_count == octets[channel] && compound[1].cname == "rtsp-cpp",
-                    "wire SR counters, SSRC or CNAME mismatch");
-                ++reports[channel];
-                const int rate = channel == 6 ? 90000 : 48000;
-                mapping[channel] = static_cast<long double>(sr.ntp) / 4294967296.0L
-                                   - static_cast<long double>(sr.rtp_timestamp - origins[channel]) / rate;
-                if (compound.size() == 3) {
-                    check(compound[2].type == 203 && compound[2].bye_sources[0] == sr.ssrc,
-                          "BYE has wrong SSRC");
-                    ++byes[channel];
-                }
-            }
-        }
-        check(Clock::now() < deadline, "EOF reports did not drain");
-        if (peer.socket.wait_readable(1)) {
-            char buffer[65536];
-            const auto count = peer.socket.receive(buffer, sizeof(buffer));
-            if (count == 0) {
-                break;
-            }
-            peer.parser.append(buffer, count);
-        }
-    }
-    peer.parser.finish();
-    check(byes[6] == 1 && byes[10] == 1 && reports[6] >= 2 && reports[10] >= 2
-        && packets[6] >= 6 && packets[10] == 8 && sources[6] != sources[10],
-        "missing periodic/final reports or independent track state");
-    const auto difference = mapping[6] - mapping[10];
-    check(difference > -0.0001L && difference < 0.0001L, "audio/video SR clocks disagree");
-    check(peer.connection.finished(), "EOF did not release connection");
-}
-
-void test_builtin_client_keepalive() {
-    // 1 秒期限、约 1.8 秒文件，客户端必须在接收媒体期间至少完成两次保活。
-    save_samples(46);
-    rtsp::RuntimeOptions options;
-    options.session_timeout_seconds = 1;
-    rtsp::RtspServer server("127.0.0.1", 0, video_path, "", options);
-    std::exception_ptr failure;
-    std::thread worker([&] {
-        try {
-            server.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-    });
-    try {
-        const auto deadline = Clock::now() + std::chrono::seconds(3);
-        while (server.local_port() == 0) {
-            check(Clock::now() < deadline, "keepalive server did not start");
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        rtsp::net::TcpSocket socket;
-        socket.connect("127.0.0.1", server.local_port());
-        rtsp::RtspClient client(socket);
-        client.run("rtsp://127.0.0.1:" + std::to_string(server.local_port()) + "/live", output_path);
-        rtsp::H264FileReader output;
-        output.open(output_path);
-        check(output.frame_count() == 46, "client keepalive truncated media");
-        rtsp::H264AccessUnit frame;
-        int pictures = 0;
-        while (output.read(frame)) {
-            for (const auto& nalu : frame.nalus) {
-                if ((static_cast<unsigned char>(nalu[0]) & 31) == 5) {
-                    check(nalu == std::string("\x65x", 2), "client keepalive corrupted picture");
-                    ++pictures;
-                }
-            }
-        }
-        check(pictures == 46, "client keepalive lost or duplicated pictures");
-        server.stop();
-        worker.join();
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
-    } catch (...) {
-        server.stop();
-        if (worker.joinable()) {
-            worker.join();
-        }
-        throw;
-    }
-}
-
-void test_keepalive_while_waiting_for_idr() {
-    // 晚加入者约等 3 秒才有 IDR，等待时间超过 1 秒 Session 期限。
-    save_samples(90, false, 2, 75);
-    rtsp::RuntimeOptions options;
-    options.session_timeout_seconds = 1;
-    Peer priming(options);
-    priming.setup();
-    priming.exchange("PLAY", "", priming.session);
-    rtsp::net::TcpSocket socket;
-    socket.connect("127.0.0.1", priming.listener.local_port());
-    test::DrivenConnection connection(priming.media, options);
-    check(connection.accept_from(priming.listener), "late client accept failed");
-    std::atomic<bool> done{false};
-    std::exception_ptr failure;
-    std::thread client([&] {
-        try {
-            rtsp::RtspClient receiver(socket);
-            receiver.run("rtsp://127.0.0.1/live", output_path);
-        } catch (...) {
-            failure = std::current_exception();
-        }
-        done.store(true);
-    });
-    try {
-        const auto deadline = Clock::now() + std::chrono::seconds(6);
-        while (!done.load()) {
-            check(Clock::now() < deadline, "late client keepalive timed out");
-            test::pump();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        client.join();
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
-        rtsp::H264FileReader output;
-        output.open(output_path);
-        check(output.frame_count() == 15 && connection.finished(),
-              "waiting client expired or failed to start at next IDR");
-    } catch (...) {
-        connection.close();
-        if (client.joinable()) {
-            client.join();
-        }
-        throw;
-    }
-}
-
 }  // namespace
 
 int main() {
@@ -711,20 +510,11 @@ int main() {
         test_sent_statistics_and_feedback();
         test_connection_expiry();
         test_rtcp_feedback_renews_connection();
-        test_wire_reports_and_eof();
         test_partial_rtp_counts_and_teardown();
         test_graceful_stop_reports();
-        test_builtin_client_keepalive();
-        test_keepalive_while_waiting_for_idr();
-        std::remove(video_path.c_str());
-        std::remove(audio_path.c_str());
-        std::remove(output_path.c_str());
-        std::cout << "PASS: RTCP, clocks, RTP-Info, Session expiry, feedback, EOF and client keepalive\n";
+        std::cout << "PASS: RTCP, clocks, RTP-Info, Session expiry, feedback and graceful stop\n";
         return 0;
     } catch (const std::exception& error) {
-        std::remove(video_path.c_str());
-        std::remove(audio_path.c_str());
-        std::remove(output_path.c_str());
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }

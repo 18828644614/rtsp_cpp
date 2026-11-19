@@ -87,14 +87,14 @@ void MicrophoneAudioSource::produce() noexcept {
                 break;
             }
             last_data = std::chrono::steady_clock::now();
-            if (config_.timeline && !start_pts) {
+            if (!start_pts) {
                 // 用首块结束附近的到达时刻估算首个采样时刻；不逐块重打 PTS。
                 const auto block_us = rescale_media_pts(frame.nb_samples, frame.sample_rate, 1000000);
                 const auto first_us = add_media_pts(
-                    config_.timeline->relative_us(frame.arrival_steady_us), -block_us);
+                    config_.timeline.relative_us(frame.arrival_steady_us), -block_us);
                 start_pts = rescale_media_pts(first_us, 1000000, encoder.track().clock_rate);
             }
-            publish(encoder.encode(frame), encoder, start_pts.value_or(0));
+            publish(encoder.encode(frame), encoder, *start_pts);
         }
     } catch (...) {
         error = std::current_exception();
@@ -132,9 +132,6 @@ void MicrophoneAudioSource::check_health() const {
 }
 const MediaTrack& MicrophoneAudioSource::track() const {
     return track_;
-}
-void MicrophoneAudioSource::resume() {
-    queue_.resume_at_latest();
 }
 AudioFrameQueueStats MicrophoneAudioSource::queue_stats() const {
     return queue_.stats();

@@ -1,135 +1,82 @@
 #pragma once
 
-#include "app/command_line.h"
-
+#include <charconv>
+#include <cstdint>
 #include <limits>
 #include <set>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace rtsp::app {
 
-// 不依赖 FFmpeg 的启动配置，默认构建也能验证参数并报告功能未启用。
+enum class ServerAction { Help, ListCameras, ListMicrophones, Stream };
+
 struct ServerOptions {
+    ServerAction action = ServerAction::Stream;
+    int camera_index = -1;
+    int microphone_index = -1;
     std::uint16_t port = 8554;
     std::string address = "127.0.0.1";
-    std::string video_path = "samples/sample.h264";
-    std::string audio_path;
-    int camera_index = -1;
-    std::string device_name;
     int width = 1280;
     int height = 720;
     int fps = 30;
     int bitrate = 2000000;
-    int gop = 30;
+    int gop = 0;  // 默认一秒一个关键帧，解析完成后取 fps。
     std::string pixel_format = "yuyv422";
-    bool list_cameras = false;
-    int microphone_index = -1;
-    std::string microphone_device;
-    bool list_microphones = false;
-    bool synthetic_audio = false;
-    bool synthetic_video = false;
     int send_buffer_ms = 150;
-    bool help = false;
-    bool camera() const {
-        return camera_index >= 0 || !device_name.empty() || synthetic_video;
-    }
-    bool audio() const {
-        return microphone_index >= 0 || !microphone_device.empty() || synthetic_audio;
-    }
 };
 
 inline int server_number(const std::string& value, int minimum, int maximum,
                          const std::string& option) {
-    int result = 0;
-    if (value.empty()) {
-        throw std::invalid_argument("empty value for " + option);
+    const char* end = value.data() + value.size();
+    int number = 0;
+    const auto parsed = std::from_chars(value.data(), end, number);
+    if (value.empty() || value[0] == '-' || parsed.ec != std::errc{} || parsed.ptr != end ||
+        number < minimum || number > maximum) {
+        throw std::invalid_argument("invalid value for " + option + ": " + value);
     }
-    for (const char digit : value) {
-        if (digit < '0' || digit > '9' || result > (maximum - (digit - '0')) / 10) {
-            throw std::invalid_argument("invalid value for " + option + ": " + value);
-        }
-        result = result * 10 + digit - '0';
-    }
-    if (result < minimum || result > maximum) {
-        throw std::invalid_argument("value out of range for " + option);
-    }
-    return result;
+    return number;
 }
 
-// args 不含程序名；文件模式保留原有位置参数，摄像头模式使用命名参数。
+// 不带参数只显示用法，避免意外打开摄像头或麦克风。
 inline ServerOptions parse_server_options(const std::vector<std::string>& args) {
     ServerOptions options;
-    if (args.empty()) {
+    if (args.empty() || (args.size() == 1 && args[0] == "--help")) {
+        options.action = ServerAction::Help;
         return options;
     }
-    if (args.size() == 1 && args[0] == "--help") {
-        options.help = true;
+    if (args.size() == 1 && args[0] == "--list-cameras") {
+        options.action = ServerAction::ListCameras;
         return options;
     }
-    if (args[0].compare(0, 2, "--") != 0) {
-        if (args.size() > 4) {
-            throw std::invalid_argument("too many file-mode arguments");
-        }
-        for (const auto& value : args) {
-            if (value.compare(0, 2, "--") == 0) {
-                throw std::invalid_argument("cannot mix file arguments and camera options");
-            }
-        }
-        options.port = parse_port(args[0]);
-        if (args.size() >= 2) {
-            options.address = args[1];
-        }
-        if (args.size() >= 3) {
-            options.video_path = args[2] == "-" ? "" : args[2];
-        }
-        if (args.size() >= 4) {
-            options.audio_path = args[3];
-        }
+    if (args.size() == 1 && args[0] == "--list-microphones") {
+        options.action = ServerAction::ListMicrophones;
         return options;
     }
 
     std::set<std::string> seen;
-    for (std::size_t index = 0; index < args.size(); ++index) {
-        const auto& option = args[index];
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        const auto& option = args[i];
         if (!seen.insert(option).second) {
             throw std::invalid_argument("duplicate option: " + option);
         }
-        if (option == "--list-cameras") {
-            options.list_cameras = true;
-            continue;
-        }
-        if (option == "--list-microphones") {
-            options.list_microphones = true;
-            continue;
-        }
-        if (option == "--synthetic-audio") {
-            options.synthetic_audio = true;
-            continue;
-        }
-        if (option == "--synthetic-video") {
-            options.synthetic_video = true;
-            continue;
-        }
-        if (option != "--camera" && option != "--device" && option != "--port" &&
+        if (option != "--camera" && option != "--microphone" && option != "--port" &&
             option != "--bind" && option != "--width" && option != "--height" &&
             option != "--fps" && option != "--bitrate" && option != "--gop" &&
-            option != "--pixel-format" && option != "--microphone" &&
-            option != "--microphone-device" && option != "--send-buffer-ms") {
+            option != "--pixel-format" && option != "--send-buffer-ms") {
             throw std::invalid_argument("unknown option: " + option);
         }
-        if (++index == args.size()) {
+        if (++i == args.size() || args[i].empty() || args[i].compare(0, 2, "--") == 0) {
             throw std::invalid_argument("missing value for " + option);
         }
-        const auto& value = args[index];
-        if (value.empty() || value.compare(0, 2, "--") == 0) {
-            throw std::invalid_argument("missing value for " + option);
-        }
+        const auto& value = args[i];
         if (option == "--camera") {
             options.camera_index = server_number(value, 0, 10000, option);
-        } else if (option == "--device") {
-            options.device_name = value;
+        } else if (option == "--microphone") {
+            options.microphone_index = server_number(value, 0, 10000, option);
         } else if (option == "--port") {
-            options.port = parse_port(value);
+            options.port = static_cast<std::uint16_t>(server_number(value, 1, 65535, option));
         } else if (option == "--bind") {
             options.address = value;
         } else if (option == "--width") {
@@ -144,44 +91,12 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
             options.gop = server_number(value, 1, 10000, option);
         } else if (option == "--pixel-format") {
             options.pixel_format = value;
-        } else if (option == "--microphone") {
-            options.microphone_index = server_number(value, 0, 10000, option);
-        } else if (option == "--microphone-device") {
-            options.microphone_device = value;
         } else if (option == "--send-buffer-ms") {
             options.send_buffer_ms = server_number(value, 0, 200, option);
         }
     }
-    if (options.list_cameras) {
-        if (seen.size() != 1) {
-            throw std::invalid_argument("--list-cameras must be used alone");
-        }
-        return options;
-    }
-    if (options.list_microphones) {
-        if (seen.size() != 1) {
-            throw std::invalid_argument("--list-microphones must be used alone");
-        }
-        return options;
-    }
-    if (!options.camera() && !options.audio()) {
-        throw std::invalid_argument("select a video or audio input");
-    }
-    if ((options.camera_index >= 0) + !options.device_name.empty() + options.synthetic_video > 1) {
-        throw std::invalid_argument("select one of --camera, --device or --synthetic-video");
-    }
-    if ((options.microphone_index >= 0) + !options.microphone_device.empty() + options.synthetic_audio > 1) {
-        throw std::invalid_argument("select one of --microphone, --microphone-device or --synthetic-audio");
-    }
-    if (seen.count("--send-buffer-ms") && !(options.camera() && options.audio())) {
-        throw std::invalid_argument("--send-buffer-ms requires both live tracks");
-    }
-    if (!options.camera()) {
-        for (const char* option : {"--width", "--height", "--fps", "--bitrate", "--gop", "--pixel-format"}) {
-            if (seen.count(option)) {
-                throw std::invalid_argument(std::string(option) + " requires a video input");
-            }
-        }
+    if (options.camera_index < 0 || options.microphone_index < 0) {
+        throw std::invalid_argument("streaming requires both --camera INDEX and --microphone INDEX");
     }
     if (options.width % 2 || options.height % 2) {
         throw std::invalid_argument("camera dimensions must be even");
@@ -189,10 +104,9 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
     if (options.pixel_format != "yuyv422" && options.pixel_format != "bgr24") {
         throw std::invalid_argument("pixel format must be yuyv422 or bgr24");
     }
-    if (!seen.count("--gop")) {
+    if (options.gop == 0) {
         options.gop = options.fps;
     }
-    options.video_path.clear();
     return options;
 }
 

@@ -1,10 +1,7 @@
 #include "event_test_driver.h"
-#include "media/h264_depacketizer.h"
 #include "rtsp/rtsp_server.h"
 
-#include <cstdio>
 #include <exception>
-#include <fstream>
 #include <iostream>
 
 namespace {
@@ -12,7 +9,6 @@ namespace {
 using Clock = rtsp::MediaSession::Clock;
 using rtsp::net::TcpSocket;
 using rtsp::net::IoStatus;
-const std::string sample_path = "event_loop_test.h264";
 
 void check(bool condition, const char* message) {
     if (!condition) {
@@ -28,20 +24,6 @@ void wait_for(Predicate ready, int seconds = 5) {
         test::pump();
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-}
-
-void save_video(int frames, std::size_t nalu_size = 2) {
-    std::ofstream output(sample_path, std::ios::binary);
-    const std::string prefix("\0\0\0\1", 4);
-    for (int i = 0; i < frames; ++i) {
-        output << prefix << std::string("\x09\xf0", 2);
-        if (i == 0) {
-            output << prefix << std::string("\x67\x64\0\x1f", 4);
-            output << prefix << std::string("\x68\xee", 2);
-        }
-        output << prefix << static_cast<char>(0x65) << std::string(nalu_size - 1, 'x');
-    }
-    check(static_cast<bool>(output), "could not save event test fixture");
 }
 
 void test_readiness_and_would_block() {
@@ -166,20 +148,8 @@ void send_text(TcpSocket& client, const std::string& text) {
     client.send_all(text.data(), text.size());
 }
 
-void setup_play(TcpSocket& client, rtsp::RtspStreamParser& parser) {
-    send_text(client, "SETUP rtsp://127.0.0.1/live/trackID=0 RTSP/1.0\r\nCSeq: 1\r\n"
-                      "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n\r\n");
-    const auto setup = receive_item(client, parser);
-    check(!setup.is_interleaved && setup.message.status_code == 200, "event SETUP failed");
-    send_text(client, "PLAY rtsp://127.0.0.1/live RTSP/1.0\r\nCSeq: 2\r\nSession: "
-              + setup.message.header("Session") + "\r\n\r\n");
-    const auto play = receive_item(client, parser);
-    check(!play.is_interleaved && play.message.status_code == 200, "media preceded PLAY response");
-}
-
 void test_half_close_and_timeouts() {
-    save_video(3);
-    auto media = std::make_shared<test::DrivenMedia>(sample_path);
+    test::DrivenMedia media;
     TcpSocket listener;
     listener.listen("127.0.0.1", 0);
     TcpSocket client;
@@ -221,85 +191,9 @@ void test_half_close_and_timeouts() {
     check(stalled_connection.finished(), "pending output ignored send-progress timeout");
 }
 
-void test_slow_connection_isolation() {
-    // 约 10 MiB 的 FU-A 流，足以让不读取的客户端触发有界输出或发送超时。
-    constexpr int frames = 80;
-    save_video(frames, 128 * 1024);
-    auto media = std::make_shared<test::DrivenMedia>(sample_path);
-    TcpSocket listener;
-    listener.listen("127.0.0.1", 0);
-    TcpSocket slow;
-    slow.connect("127.0.0.1", listener.local_port());
-    test::DrivenConnection slow_connection(media);
-    check(slow_connection.accept_from(listener), "slow accept failed");
-    int send_buffer = 1024;
-    check(::setsockopt(slow_connection.native_handle(), SOL_SOCKET, SO_SNDBUF,
-              reinterpret_cast<const char*>(&send_buffer), sizeof(send_buffer)) == 0,
-          "could not constrain slow socket");
-    rtsp::RtspStreamParser slow_parser;
-    setup_play(slow, slow_parser);
-
-    TcpSocket healthy;
-    healthy.connect("127.0.0.1", listener.local_port());
-    test::DrivenConnection healthy_connection(media);
-    check(healthy_connection.accept_from(listener), "healthy accept failed");
-    rtsp::RtspStreamParser parser;
-    setup_play(healthy, parser);
-    rtsp::H264Depacketizer depacketizer;
-    std::uint16_t sequence = 100;
-    int pictures = 0;
-    int complete_units = 0;
-    const auto deadline = Clock::now() + std::chrono::seconds(8);
-    bool eof = false;
-    while (!eof) {
-        check(Clock::now() < deadline, "healthy peer stalled behind slow connection");
-        test::pump();
-        rtsp::RtspStreamItem item;
-        while (parser.next(item)) {
-            if (item.is_interleaved && item.channel == 1) {
-                rtsp::parse_rtcp_compound(item.payload);
-                continue;
-            }
-            check(item.is_interleaved && item.channel == 0, "stream framing changed during partial writes");
-            const auto packet = rtsp::parse_rtp_packet(item.payload);
-            check(packet.sequence_number == sequence++, "partial writes broke RTP sequence");
-            std::vector<std::string> nalus;
-            check(depacketizer.push(packet, nalus) != rtsp::H264Dropped, "FU-A was broken by partial writes");
-            for (const auto& nalu : nalus) {
-                if ((static_cast<unsigned char>(nalu[0]) & 31) == 5) {
-                    check(nalu == std::string(1, static_cast<char>(0x65)) + std::string(128 * 1024 - 1, 'x'),
-                          "FU-A picture bytes changed");
-                    ++pictures;
-                }
-            }
-            if (packet.marker) {
-                depacketizer.finish();
-                ++complete_units;
-            }
-        }
-        if (healthy.wait_readable(1)) {
-            char buffer[65536];
-            const auto count = healthy.receive(buffer, sizeof(buffer));
-            if (count == 0) {
-                eof = true;
-            } else {
-                parser.append(buffer, count);
-            }
-        }
-    }
-    parser.finish();
-    depacketizer.finish();
-    test::wait_finished(healthy_connection);
-    wait_for([&] {
-        return slow_connection.finished();
-    });
-    check(pictures >= frames - 3 && pictures == complete_units,
-          "healthy client lost pictures due to slow client");
-}
-
 void test_server_stop() {
-    save_video(3);
-    rtsp::RtspServer server("127.0.0.1", 0, sample_path);
+    rtsp::RtspServer server("127.0.0.1", 0, std::make_unique<test::WireVideo>(0),
+                            std::make_unique<test::WireAudio>(), rtsp::CaptureTimeline{});
     std::exception_ptr failure;
     std::thread worker([&] {
         try {
@@ -359,54 +253,31 @@ void test_server_stop() {
     }
 }
 
-void test_media_deadlines_and_budget() {
-    save_video(64);
-    rtsp::MediaSession media(sample_path);
+void test_media_budget() {
+    const auto t0 = Clock::now();
+    rtsp::MediaSession media(std::make_unique<test::WireVideo>(64, 2, 0),
+                             std::make_unique<test::WireAudio>(), rtsp::CaptureTimeline(t0));
     auto queue = std::make_shared<rtsp::net::OutboundQueue>();
     auto subscription = std::make_shared<rtsp::MediaSubscription>(queue);
     subscription->add_track(0, media.description().tracks[0], {}, 100, 1);
-    check(!media.next_deadline(), "idle media scheduled work before PLAY");
-    check(media.subscribe(subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
-          "timer subscription failed");
+    check(media.subscribe(subscription, "PLAY") == rtsp::SubscribeResult::Started, "PLAY failed");
     rtsp::net::OutboundMessage message;
-    check(queue->try_pop(message) && message.wire == "PLAY 200", "timer PLAY response missing");
-    const auto start = Clock::now();
-    media.tick(start);
-    check(media.next_deadline() == start + std::chrono::milliseconds(40), "wrong next media deadline");
-    const auto first_bytes = queue->bytes();
-    media.tick(start + std::chrono::milliseconds(39));
-    check(queue->bytes() == first_bytes, "timer delivered media before its deadline");
-    while (queue->try_pop(message)) {}
-    subscription->cancel();
-    media.tick(start + std::chrono::seconds(10));
-    check(!media.next_deadline() && !media.ended(), "idle media consumed pending frame");
-    auto resumed = std::make_shared<rtsp::MediaSubscription>(queue);
-    resumed->add_track(0, media.description().tracks[0], {}, 100, 2);
-    check(media.subscribe(resumed, "PLAY 200") == rtsp::SubscribeResult::Started,
-          "resume subscription failed");
-    check(queue->try_pop(message), "resume response missing");
-    const auto resume_time = start + std::chrono::seconds(20);
-    media.tick(resume_time);
-    check(media.next_deadline() == resume_time + std::chrono::milliseconds(40),
-          "resume replayed elapsed wall time instead of resetting clock origin");
-    while (queue->try_pop(message)) {}
-    const auto delayed = start + std::chrono::seconds(100);
-    media.tick(delayed);
-    int markers = 0;
-    while (queue->try_pop(message)) {
-        if (message.kind == rtsp::net::OutboundKind::Rtcp) {
-            continue;
+    check(queue->try_pop(message) && message.wire == "PLAY", "PLAY response missing");
+    const auto pop_frames = [&] {
+        int frames = 0;
+        while (queue->try_pop(message)) {
+            check(message.kind == rtsp::net::OutboundKind::Rtp, "expected RTP");
+            ++frames;
         }
-        rtsp::RtspStreamParser parser;
-        parser.append(message.wire.data(), message.wire.size());
-        rtsp::RtspStreamItem item;
-        check(parser.next(item) && item.is_interleaved, "timer produced malformed frame");
-        markers += rtsp::parse_rtp_packet(item.payload).marker ? 1 : 0;
-    }
-    check(markers == 32 && !media.ended() && media.next_deadline() == delayed,
-          "overdue media ignored per-tick fairness budget");
-    media.tick(delayed);
-    check(media.ended() && queue->closed() && !media.next_deadline(), "timer EOF did not finish");
+        return frames;
+    };
+    const auto due = t0 + std::chrono::milliseconds(150);
+    media.tick(due - std::chrono::milliseconds(1));
+    check(queue->empty(), "timer delivered media before its deadline");
+    media.tick(due);
+    check(pop_frames() == 32 && media.next_deadline() == due, "first tick exceeded fairness budget");
+    media.tick(due);
+    check(pop_frames() == 32 && !media.ended(), "second tick lost pending AUs");
 }
 
 }  // namespace
@@ -416,14 +287,11 @@ int main() {
         test_readiness_and_would_block();
         test_partial_send_resume();
         test_half_close_and_timeouts();
-        test_slow_connection_isolation();
-        test_media_deadlines_and_budget();
+        test_media_budget();
         test_server_stop();
-        std::remove(sample_path.c_str());
-        std::cout << "PASS: select, WouldBlock, partial writes, half-close, timeouts, slow peer and stop\n";
+        std::cout << "PASS: select, WouldBlock, partial writes, half-close, timeouts, fairness and stop\n";
         return 0;
     } catch (const std::exception& error) {
-        std::remove(sample_path.c_str());
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;
     }

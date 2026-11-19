@@ -84,29 +84,23 @@ private:
 enum class SubscribeResult {
     Started,
     Ended,
-    InvalidRange,
     QueueClosed
 };
 
-// 一个资源、共享音视频进度；只能由所属事件循环线程推进。空路径关闭对应轨道。
+// /live 的两路实时媒体；只能由所属事件循环线程推进。
 class MediaSession {
 public:
     using Clock = std::chrono::steady_clock;
-    explicit MediaSession(const std::string& video_path, const std::string& audio_path = "");
-    // 接管视频源；nullptr 表示关闭视频轨道。源须在构造时准备好轨道配置。
-    explicit MediaSession(std::unique_ptr<VideoSource> video_source,
-                          const std::string& audio_path = "");
-    // 注入实时源使用的同一时间线时，PTS 相对固定 T0，send_buffer 只控制发送期限。
-    // 不注入则保留原来的播放时钟行为。nullptr 可关闭一条轨道。
+    // 两个源必须已经准备好，且与调度器使用同一个 T0。
     MediaSession(std::unique_ptr<VideoSource> video_source,
                  std::unique_ptr<AudioSource> audio_source,
-                 std::shared_ptr<const CaptureTimeline> timeline = nullptr,
+                 CaptureTimeline timeline,
                  std::chrono::milliseconds send_buffer = std::chrono::milliseconds{150});
     ~MediaSession();
 
     const SessionDescription& description() const;
     SubscribeResult subscribe(const std::shared_ptr<MediaSubscription>& subscription,
-                              const std::string& play_response, bool from_start = false);
+                              const std::string& play_response);
     bool ended() const;
     void stop();
     
@@ -124,19 +118,14 @@ private:
     MediaClock clock_;
     std::unique_ptr<VideoSource> video_source_;
     std::unique_ptr<AudioSource> audio_source_;
-    const std::shared_ptr<const CaptureTimeline> timeline_;
+    const CaptureTimeline timeline_;
     const std::chrono::milliseconds send_buffer_;
     H264Packetizer video_packetizer_;
     AacPacketizer audio_packetizer_;
-    std::size_t video_track_ = 0;
-    std::size_t audio_track_ = 0;
 
     std::vector<std::weak_ptr<MediaSubscription>> subscribers_;
-    bool started_ = false;
     bool ended_ = false;
-    bool reset_clock_ = true;
     bool waiting_for_idr_ = false;
-    Clock::time_point clock_origin_{};
     std::optional<Clock::time_point> next_deadline_;
     // 各轨道保留一份待发负载，tick 内以常量引用同步分发，不转移所有权。
     std::optional<RtpPayloadUnit> video_;

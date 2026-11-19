@@ -23,7 +23,7 @@ class RtspServerConnection {
 public:
     using Clock = std::chrono::steady_clock;
     // 这行代码的作用是：创建一个管理单个客户端连接的对象，准备好它的会话状态、发送队列和超时配置。
-    explicit RtspServerConnection(std::shared_ptr<MediaSession> media_session,
+    explicit RtspServerConnection(MediaSession& media_session,
                                   RuntimeOptions options = {});
     ~RtspServerConnection();
 
@@ -65,7 +65,7 @@ private:
     void fail(const std::exception& error);
 
     net::TcpSocket socket_;
-    std::shared_ptr<MediaSession> media_session_;
+    MediaSession& media_session_;
     std::string session_id_;
     std::shared_ptr<net::OutboundQueue> outbound_queue_;
     // RTSP 协议状态、轨道 SETUP 信息等

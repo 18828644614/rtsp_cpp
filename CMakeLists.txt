@@ -1,17 +1,34 @@
 cmake_minimum_required(VERSION 3.16)
 project(rtsp_cpp VERSION 0.1.0 LANGUAGES CXX)
 
-# 当前先实现 Windows 阻塞式 TCP，后续在 net 模块内扩展其他平台。
 if(NOT WIN32)
-    message(FATAL_ERROR "This version currently supports Windows only.")
+    message(FATAL_ERROR "The live capture server requires Windows and DirectShow.")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# 客户端和服务器共用网络层，后续逐步向此库添加协议模块。
+include(cmake/FFmpeg.cmake)
+require_ffmpeg(avdevice avformat avcodec avutil swscale swresample)
+
+# 一个库供服务器和测试共用，摄像头与麦克风始终一起构建。
 add_library(rtsp_core STATIC
+    src/media/camera_capture.cpp
+    src/media/camera_capture_input.cpp
+    src/media/camera_video_source.cpp
+    src/media/h264_encoder.cpp
+    src/media/video_frame_queue.cpp
+    src/media/microphone_capture.cpp
+    src/media/microphone_capture_input.cpp
+    src/media/microphone_audio_source.cpp
+    src/media/audio_resampler.cpp
+    src/media/aac_encoder.cpp
+    src/media/audio_frame_queue.cpp
+    src/media/h264_packetizer.cpp
+    src/media/aac_packetizer.cpp
+    src/media/media_clock.cpp
+    src/media/media_session.cpp
     src/net/socket_utils.cpp
     src/net/tcp_socket.cpp
     src/net/event_loop.cpp
@@ -20,165 +37,70 @@ add_library(rtsp_core STATIC
     src/rtsp/rtsp_stream_parser.cpp
     src/rtsp/rtsp_session_utils.cpp
     src/rtsp/rtsp_server_session.cpp
-    src/rtsp/rtsp_server.cpp
     src/rtsp/rtsp_server_connection.cpp
-    src/rtsp/rtsp_client.cpp
+    src/rtsp/rtsp_server.cpp
     src/sdp/session_description.cpp
     src/rtp/rtp_packet.cpp
     src/rtp/rtp_sender.cpp
-    src/rtp/rtcp_packet.cpp
-    src/media/media_clock.cpp
-    src/media/h264_packetizer.cpp
-    src/media/h264_depacketizer.cpp
-    src/media/h264_file_reader.cpp
-    src/media/aac_file_reader.cpp
-    src/media/aac_packetizer.cpp
-    src/media/file_video_source.cpp
-    src/media/file_audio_source.cpp
-    src/media/video_frame_queue.cpp
-    src/media/audio_frame_queue.cpp
-    src/media/media_session.cpp
-    src/media/h264_file_writer.cpp
-)
+    src/rtp/rtcp_packet.cpp)
 target_include_directories(rtsp_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_definitions(rtsp_core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0600)
-target_link_libraries(rtsp_core PUBLIC ws2_32)
-
-add_executable(rtsp_client src/app/client_main.cpp)
-target_link_libraries(rtsp_client PRIVATE rtsp_core)
+target_link_libraries(rtsp_core PUBLIC ws2_32
+    PRIVATE FFmpeg::avdevice FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil
+            FFmpeg::swscale FFmpeg::swresample ole32 oleaut32 strmiids)
+if(MSVC)
+    target_compile_options(rtsp_core PUBLIC /W4 /utf-8)
+else()
+    target_compile_options(rtsp_core PUBLIC -Wall -Wextra -Wpedantic)
+endif()
 
 add_executable(rtsp_server src/app/server_main.cpp)
 target_link_libraries(rtsp_server PRIVATE rtsp_core)
 if(MINGW)
     target_link_options(rtsp_server PRIVATE -municode)
 endif()
+copy_ffmpeg_runtime(rtsp_server)
 
-# 使用 CTest 注册测试，无需安装第三方测试框架。
 include(CTest)
-option(ENABLE_CAMERA_CAPTURE "Build FFmpeg/DirectShow capture and camera device enumeration" OFF)
-if(ENABLE_CAMERA_CAPTURE)
-    include(cmake/CameraCapture.cmake)
-endif()
-option(ENABLE_MICROPHONE_CAPTURE "Build FFmpeg/DirectShow microphone capture and probe" OFF)
-if(ENABLE_MICROPHONE_CAPTURE)
-    include(cmake/MicrophoneCapture.cmake)
-endif()
-option(ENABLE_H264_ENCODING "Build the FFmpeg/libx264 encoder, live video source and probe" OFF)
-if(ENABLE_H264_ENCODING)
-    include(cmake/H264Encoding.cmake)
-endif()
-option(ENABLE_AAC_ENCODING "Build AAC encoding, resampling and live audio source" OFF)
-if(ENABLE_AAC_ENCODING)
-    include(cmake/AacEncoding.cmake)
-endif()
-if(ENABLE_CAMERA_CAPTURE)
-    target_link_libraries(rtsp_server PRIVATE camera_capture)
-    target_compile_definitions(rtsp_server PRIVATE RTSP_HAS_CAMERA_CAPTURE)
-endif()
-if(ENABLE_H264_ENCODING)
-    target_link_libraries(rtsp_server PRIVATE camera_video_source FFmpeg::avutil)
-    target_compile_definitions(rtsp_server PRIVATE RTSP_HAS_VIDEO_SOURCE)
-endif()
-if(ENABLE_CAMERA_CAPTURE OR ENABLE_H264_ENCODING OR ENABLE_AAC_ENCODING)
-    copy_ffmpeg_runtime(rtsp_server)
-endif()
-if(BUILD_TESTING AND ENABLE_H264_ENCODING AND ENABLE_AAC_ENCODING)
-    target_link_libraries(camera_rtsp_tests PRIVATE microphone_audio_source)
-    target_compile_definitions(camera_rtsp_tests PRIVATE RTSP_TEST_DUAL_LIVE)
-endif()
-
 if(BUILD_TESTING)
-    add_executable(audio_frame_queue_tests tests/audio_frame_queue_tests.cpp)
-    target_link_libraries(audio_frame_queue_tests PRIVATE rtsp_core)
-    add_test(NAME audio_frame_queue_tests COMMAND audio_frame_queue_tests)
-    set_tests_properties(audio_frame_queue_tests PROPERTIES TIMEOUT 10)
+    add_library(test_receivers STATIC tests/support/h264_depacketizer.cpp)
+    target_link_libraries(test_receivers PUBLIC rtsp_core)
 
-    add_executable(server_options_tests tests/server_options_tests.cpp)
-    target_link_libraries(server_options_tests PRIVATE rtsp_core)
-    add_test(NAME server_options_tests COMMAND server_options_tests)
+    foreach(test_name IN ITEMS
+        server_options_tests tcp_tests event_loop_tests outbound_tests
+        rtsp_tests session_tests rtp_tests runtime_tests
+        h264_tests aac_tests media_session_tests
+        audio_frame_queue_tests video_frame_queue_tests
+        camera_capture_tests microphone_capture_tests
+        h264_encoder_tests aac_encoder_tests
+        camera_video_source_tests microphone_audio_source_tests camera_rtsp_tests)
+        add_executable(${test_name} tests/${test_name}.cpp)
+        target_link_libraries(${test_name} PRIVATE rtsp_core)
+        # 测试与服务器在同一输出目录，FFmpeg DLL 只复制一次。
+        add_dependencies(${test_name} rtsp_server)
+        add_test(NAME ${test_name} COMMAND ${test_name})
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 30)
+    endforeach()
+    foreach(test_name IN ITEMS camera_capture_tests microphone_capture_tests
+        h264_encoder_tests aac_encoder_tests camera_video_source_tests
+        microphone_audio_source_tests camera_rtsp_tests)
+        target_link_libraries(${test_name} PRIVATE FFmpeg::avcodec FFmpeg::avutil)
+    endforeach()
+    target_link_libraries(camera_rtsp_tests PRIVATE test_receivers)
+    target_link_libraries(h264_tests PRIVATE test_receivers)
+
     add_test(NAME rtsp_server_help COMMAND rtsp_server --help)
-    set_tests_properties(server_options_tests rtsp_server_help PROPERTIES TIMEOUT 10)
+    add_test(NAME rtsp_server_requires_both COMMAND rtsp_server --camera 0)
+    set_tests_properties(rtsp_server_requires_both PROPERTIES WILL_FAIL TRUE)
 
-    add_executable(video_frame_queue_tests tests/video_frame_queue_tests.cpp)
-    target_link_libraries(video_frame_queue_tests PRIVATE rtsp_core)
-    add_test(NAME video_frame_queue_tests COMMAND video_frame_queue_tests)
-    set_tests_properties(video_frame_queue_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(runtime_tests tests/runtime_tests.cpp)
-    target_link_libraries(runtime_tests PRIVATE rtsp_core)
-    add_test(NAME runtime_tests COMMAND runtime_tests)
-    set_tests_properties(runtime_tests PROPERTIES TIMEOUT 25)
-
-    add_executable(tcp_tests tests/tcp_tests.cpp)
-    target_link_libraries(tcp_tests PRIVATE rtsp_core)
-    add_test(NAME tcp_tests COMMAND tcp_tests)
-    set_tests_properties(tcp_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(event_loop_tests tests/event_loop_tests.cpp)
-    target_link_libraries(event_loop_tests PRIVATE rtsp_core)
-    add_test(NAME event_loop_tests COMMAND event_loop_tests)
-    set_tests_properties(event_loop_tests PROPERTIES TIMEOUT 25)
-
-    add_executable(rtsp_tests tests/rtsp_tests.cpp)
-    target_link_libraries(rtsp_tests PRIVATE rtsp_core)
-    add_test(NAME rtsp_tests COMMAND rtsp_tests)
-    set_tests_properties(rtsp_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(session_tests tests/session_tests.cpp)
-    target_link_libraries(session_tests PRIVATE rtsp_core)
-    add_test(NAME session_tests COMMAND session_tests)
-    set_tests_properties(session_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(rtp_tests tests/rtp_tests.cpp)
-    target_link_libraries(rtp_tests PRIVATE rtsp_core)
-    add_test(NAME rtp_tests COMMAND rtp_tests)
-    set_tests_properties(rtp_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(outbound_tests tests/outbound_tests.cpp)
-    target_link_libraries(outbound_tests PRIVATE rtsp_core)
-    add_test(NAME outbound_tests COMMAND outbound_tests)
-    set_tests_properties(outbound_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(h264_tests tests/h264_tests.cpp)
-    target_link_libraries(h264_tests PRIVATE rtsp_core)
-    add_test(NAME h264_tests COMMAND h264_tests)
-    set_tests_properties(h264_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(media_file_tests tests/media_file_tests.cpp)
-    target_link_libraries(media_file_tests PRIVATE rtsp_core)
-    add_test(NAME media_file_tests COMMAND media_file_tests)
-    set_tests_properties(media_file_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(media_session_tests tests/media_session_tests.cpp)
-    target_link_libraries(media_session_tests PRIVATE rtsp_core)
-    add_test(NAME media_session_tests COMMAND media_session_tests)
-    set_tests_properties(media_session_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(aac_tests tests/aac_tests.cpp)
-    target_link_libraries(aac_tests PRIVATE rtsp_core)
-    add_test(NAME aac_tests COMMAND aac_tests)
-    set_tests_properties(aac_tests PROPERTIES TIMEOUT 20)
-
-    add_executable(multitrack_tests tests/multitrack_tests.cpp)
-    target_link_libraries(multitrack_tests PRIVATE rtsp_core)
-    add_test(NAME multitrack_tests COMMAND multitrack_tests)
-    set_tests_properties(multitrack_tests PROPERTIES TIMEOUT 20)
-
-    find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)
-    if(POWERSHELL_EXECUTABLE)
-        add_test(NAME media_integration COMMAND "${POWERSHELL_EXECUTABLE}"
-            -NoProfile -ExecutionPolicy Bypass
-            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/media_integration.ps1"
-            -ServerPath "$<TARGET_FILE:rtsp_server>"
-            -ClientPath "$<TARGET_FILE:rtsp_client>"
-            -WorkDirectory "${CMAKE_CURRENT_BINARY_DIR}/media_integration")
-        set_tests_properties(media_integration PROPERTIES TIMEOUT 45)
+    # 可选：用外部播放器的解码器验证真实 TCP 双轨流，不打开物理设备。
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    find_program(FFMPEG_EXECUTABLE NAMES ffmpeg HINTS "${FFMPEG_RUNTIME_DIR}")
+    if(Python3_Interpreter_FOUND AND FFMPEG_EXECUTABLE)
+        add_test(NAME live_av_integration COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_camera_rtsp.py"
+            --fixture "$<TARGET_FILE:camera_rtsp_tests>" --ffmpeg "${FFMPEG_EXECUTABLE}"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/live_av_integration")
+        set_tests_properties(live_av_integration PROPERTIES TIMEOUT 30)
     endif()
-endif()
-
-# /utf-8 使 MSVC 正确读取中文注释；两种编译器均开启常用警告。
-if(MSVC)
-    target_compile_options(rtsp_core PUBLIC /W4 /utf-8)
-else()
-    target_compile_options(rtsp_core PUBLIC -Wall -Wextra -Wpedantic)
 endif()

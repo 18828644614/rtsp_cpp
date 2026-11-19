@@ -28,11 +28,11 @@ public:
 
 struct MicrophoneAudioSourceConfig {
     AacEncoderConfig encoder;
-    AudioFrameQueueLimits queue;
+    AudioFrameQueueLimits queue{9};  // 9 个 AAC AU 在 48 kHz 下约 192 ms。
     std::chrono::milliseconds startup_timeout{5000};
     std::chrono::milliseconds read_timeout{100};
     std::chrono::milliseconds no_data_timeout{5000};
-    std::shared_ptr<const CaptureTimeline> timeline;
+    CaptureTimeline timeline;
 };
 
 class MicrophoneAudioSource final : public AudioSource {
@@ -45,11 +45,7 @@ public:
     bool read(AacAccessUnit& frame) override;
     bool ended() const override;
     const MediaTrack& track() const override;
-    bool is_live() const override {
-        return true;
-    }
     void check_health() const override;
-    void resume() override;
     void stop() override;
     AudioFrameQueueStats queue_stats() const;
 

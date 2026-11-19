@@ -3,6 +3,7 @@
 #include "media/media_session.h"
 #include "net/event_loop.h"
 #include "rtsp/rtsp_server_connection.h"
+#include "support/wire_sources.h"
 
 #include <algorithm>
 #include <chrono>
@@ -19,8 +20,10 @@ inline std::vector<rtsp::RtspServerConnection*> connections;
 
 class DrivenMedia : public rtsp::MediaSession {
 public:
-    explicit DrivenMedia(const std::string& video, const std::string& audio = "")
-        : rtsp::MediaSession(video, audio) {
+    explicit DrivenMedia(int frames = 0, std::size_t nalu_size = 2)
+        : rtsp::MediaSession(std::make_unique<WireVideo>(frames, nalu_size),
+                             std::make_unique<WireAudio>(), rtsp::CaptureTimeline{},
+                             std::chrono::milliseconds{0}) {
         media_sessions.push_back(this);
     }
     ~DrivenMedia() {
@@ -31,8 +34,8 @@ public:
 
 class DrivenConnection : public rtsp::RtspServerConnection {
 public:
-    explicit DrivenConnection(std::shared_ptr<rtsp::MediaSession> media, rtsp::RuntimeOptions options = {})
-        : rtsp::RtspServerConnection(std::move(media), options) {
+    explicit DrivenConnection(rtsp::MediaSession& media, rtsp::RuntimeOptions options = {})
+        : rtsp::RtspServerConnection(media, options) {
         connections.push_back(this);
     }
     ~DrivenConnection() {

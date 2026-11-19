@@ -1,4 +1,4 @@
-"""可选的独立 FFmpeg 网络验收；生成帧来自测试程序，不需要摄像头。"""
+"""独立 FFmpeg 双轨解码验收；不打开摄像头或麦克风。"""
 
 import argparse
 import json
@@ -15,10 +15,10 @@ def wait_for(predicate, deadline, message):
         time.sleep(0.02)
 
 
-def frame_hashes(path):
+def frame_hashes(path, track):
     return [line.rsplit(",", 1)[1].strip()
             for line in path.read_text(encoding="utf-8").splitlines()
-            if line and not line.startswith("#")]
+            if line and line.split(",", 1)[0].strip() == str(track)]
 
 
 def main():
@@ -43,19 +43,22 @@ def main():
         def log():
             return server_log.read_text(encoding="utf-8", errors="replace")
 
-        wait_for(lambda: "camera_test_url=" in log() or server.poll() is not None,
+        wait_for(lambda: "live_test_url=" in log() or server.poll() is not None,
                  time.monotonic() + 5, "test server did not publish its URL")
-        match = re.search(r"camera_test_url=(rtsp://\S+)", log())
+        match = re.search(r"live_test_url=(rtsp://\S+)", log())
         if not match:
             raise RuntimeError(log())
         url = match.group(1)
 
-        def receiver(name, frames):
+        def receiver(name, video_frames):
             handles.append((output / f"{name}.log").open("wb"))
             process = subprocess.Popen([
                 str(args.ffmpeg.resolve()), "-hide_banner", "-loglevel", "error", "-y",
                 "-rtsp_transport", "tcp", "-analyzeduration", "0", "-probesize", "32",
-                "-i", url, "-map", "0:v:0", "-frames:v", str(frames),
+                "-i", url, "-map", "0:v:0", "-map", "0:a:0",
+                # 单一输出以视频帧数结束；独立限制音频会提前停止整个输出。
+                "-frames:v", str(video_frames),
+                "-c:a", "pcm_s16le",
                 "-fps_mode", "passthrough", "-f", "framemd5", str(output / f"{name}.md5")],
                 cwd=output, stdout=handles[-1], stderr=subprocess.STDOUT, creationflags=flags)
             processes.append(process)
@@ -69,10 +72,14 @@ def main():
         for process in (second, first):
             if process.wait(timeout=8) != 0:
                 raise RuntimeError("FFmpeg failed; inspect receiver logs")
-        a = frame_hashes(output / "a.md5")
-        b = frame_hashes(output / "b.md5")
+        a = frame_hashes(output / "a.md5", 0)
+        b = frame_hashes(output / "b.md5", 0)
+        audio_a = frame_hashes(output / "a.md5", 1)
+        audio_b = frame_hashes(output / "b.md5", 1)
         if len(a) != 90 or len(b) != 30:
             raise RuntimeError(f"unexpected frame counts: a={len(a)}, b={len(b)}")
+        if len(audio_a) < 90 or len(audio_b) < 25:
+            raise RuntimeError(f"unexpected decoded AAC counts: a={len(audio_a)}, b={len(audio_b)}")
         offsets = [i for i in range(1, len(a) - len(b) + 1) if a[i:i + len(b)] == b]
         if not offsets:
             raise RuntimeError("late FFmpeg decoded different frames")
@@ -81,6 +88,7 @@ def main():
         if server.wait(timeout=12) != 0:
             raise RuntimeError("test server failed during shutdown")
         result = {"first_frames": len(a), "late_frames": len(b), "late_offset": offsets[0],
+                  "first_audio_frames": len(audio_a), "late_audio_frames": len(audio_b),
                   "decoded_hashes_match": True, "ffmpeg_errors": False}
         (output / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         print(json.dumps(result))

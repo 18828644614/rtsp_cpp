@@ -10,7 +10,7 @@ extern "C" {
 #include <algorithm>
 #include <stdexcept>
 
-namespace rtsp::app {
+namespace rtsp::test {
 
 // 探测程序的可重复输入；与真实采集共用 CameraFrame/编码路径，不枚举或打开设备。
 inline CameraFrame synthetic_camera_frame(int width, int height, const std::string& format,

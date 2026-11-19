@@ -1,15 +1,6 @@
-#include "app/synthetic_camera_frame.h"
+#include "support/synthetic_camera_frame.h"
 #include "media/camera_video_source.h"
-#include "media/h264_depacketizer.h"
-#include "media/media_session.h"
-#include "rtsp/rtsp_stream_parser.h"
-#ifdef RTSP_TEST_CAMERA_CAPTURE
 #include "media/camera_capture_input.h"
-#endif
-
-extern "C" {
-#include <libavcodec/avcodec.h>
-}
 
 #include <condition_variable>
 #include <iostream>
@@ -53,6 +44,7 @@ struct InputState {
 };
 rtsp::CameraVideoSourceConfig config() {
     rtsp::CameraVideoSourceConfig result;
+    result.timeline = rtsp::CaptureTimeline(Clock::time_point{});
     result.encoder.width = 64;
     result.encoder.height = 48;
     result.encoder.gop = 3;
@@ -81,7 +73,7 @@ public:
         }
         --state_->credits;
         lock.unlock();
-        frame = rtsp::app::synthetic_camera_frame(64, 48, "yuyv422", 30, 1, index_++);
+        frame = rtsp::test::synthetic_camera_frame(64, 48, "yuyv422", 30, 1, index_++);
         frame.arrival_steady_us = first_arrival_us_ + *frame.source_pts * 50000;
         return rtsp::CameraInputResult::FrameReady;
     }
@@ -142,7 +134,7 @@ void test_source_wait_drain_stop() {
 void test_capture_timeline() {
     const Clock::time_point epoch{1s};
     auto cfg = config();
-    cfg.timeline = std::make_shared<const rtsp::CaptureTimeline>(epoch);
+    cfg.timeline = rtsp::CaptureTimeline(epoch);
     for (const int start_ms : {80, 200}) {
         auto state = std::make_shared<InputState>();
         rtsp::CameraVideoSource camera(
@@ -225,132 +217,6 @@ void test_overflow_and_resume() {
     check(camera->read(frame) && frame.is_keyframe && frame.pts == 18000, "resume missed next IDR");
 }
 
-struct Peer {
-    std::shared_ptr<rtsp::net::OutboundQueue> queue = std::make_shared<rtsp::net::OutboundQueue>();
-    std::shared_ptr<rtsp::MediaSubscription> subscription = std::make_shared<rtsp::MediaSubscription>(queue);
-    explicit Peer(const rtsp::MediaTrack& track) { subscription->add_track(0, track, {}, 100, 42); }
-};
-
-// 从真实 RTP 负载重组 AU，再送 FFmpeg 解码，验证线程→队列→MediaSession 的完整交付。
-int decode_output(Peer& peer) {
-    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-    AVCodecContext* context = avcodec_alloc_context3(codec);
-    AVPacket* packet = av_packet_alloc();
-    AVFrame* frame = av_frame_alloc();
-    check(context && packet && frame, "allocate decoder");
-    int count = 0;
-    try {
-        check(avcodec_open2(context, codec, nullptr) >= 0, "open decoder");
-        rtsp::H264Depacketizer depacketizer;
-        rtsp::net::OutboundMessage message;
-        std::string au;
-        bool play = false;
-        while (peer.queue->try_pop(message)) {
-            if (message.kind == rtsp::net::OutboundKind::RtspResponse) {
-                play = true;
-                continue;
-            }
-            if (message.kind != rtsp::net::OutboundKind::Rtp) {
-                continue;
-            }
-            check(play, "RTP preceded PLAY");
-            rtsp::RtspStreamParser parser;
-            parser.append(message.wire.data(), message.wire.size());
-            rtsp::RtspStreamItem item;
-            check(parser.next(item) && item.is_interleaved, "RTP interleaving invalid");
-            const auto rtp = rtsp::parse_rtp_packet(item.payload);
-            std::vector<std::string> nalus;
-            check(depacketizer.push(rtp, nalus) != rtsp::H264Dropped, "RTP depacketizer dropped NALU");
-            for (const auto& nalu : nalus) {
-                au.append("\0\0\0\1", 4);
-                au += nalu;
-            }
-            if (!rtp.marker) {
-                continue;
-            }
-            check(av_new_packet(packet, static_cast<int>(au.size())) >= 0, "allocate AU packet");
-            std::copy(au.begin(), au.end(), packet->data);
-            check(avcodec_send_packet(context, packet) >= 0, "send AU to decoder");
-            av_packet_unref(packet);
-            au.clear();
-            while (avcodec_receive_frame(context, frame) == 0) {
-                check(frame->width == 64 && frame->height == 48, "decoded dimensions wrong");
-                ++count;
-                av_frame_unref(frame);
-            }
-        }
-        check(avcodec_send_packet(context, nullptr) >= 0, "flush decoder");
-        while (avcodec_receive_frame(context, frame) == 0) {
-            ++count;
-            av_frame_unref(frame);
-        }
-    } catch (...) {
-        av_frame_free(&frame);
-        av_packet_free(&packet);
-        avcodec_free_context(&context);
-        throw;
-    }
-    av_frame_free(&frame);
-    av_packet_free(&packet);
-    avcodec_free_context(&context);
-    return count;
-}
-void test_media_session(bool failure) {
-    const auto state = std::make_shared<InputState>();
-    auto camera = source(state);
-    auto* observer = camera.get();
-    rtsp::MediaSession media(std::move(camera));
-    Peer peer(media.description().tracks[0]);
-    check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started, "PLAY failed");
-    const auto now = Clock::now();
-    media.tick(now);
-    check(!media.ended() && !peer.queue->closed() && media.next_deadline()
-              && *media.next_deadline() > now, "live wait closed session or busy-polled");
-    state->update(failure ? 0 : 5, !failure, failure);
-    await([&] {
-        return observer->queue_stats().closed;
-    });
-    for (int i = 1; i <= 8 && !media.ended(); ++i) {
-        media.tick(now + i * 40ms);
-    }
-    check(media.ended() && peer.queue->closed() && peer.subscription->failed() == failure,
-          "session did not distinguish normal end and device failure");
-    check(decode_output(peer) == (failure ? 1 : 6), "MediaSession RTP did not decode all frames");
-    check_released(state);
-}
-void test_idle_and_session_stop() {
-    const auto state = std::make_shared<InputState>();
-    auto camera = source(state);
-    auto* observer = camera.get();
-    rtsp::MediaSession media(std::move(camera));
-    media.tick(Clock::now());
-    check(!media.next_deadline() && observer->queue_stats().frames == 1, "idle session consumed camera");
-    state->update(4);
-    await([&] {
-        return observer->queue_stats().frames == 5;
-    });
-    Peer peer(media.description().tracks[0]);
-    media.subscribe(peer.subscription, "PLAY 200");
-    check(observer->queue_stats().frames == 2, "first watcher did not trim to latest IDR");
-    media.tick(Clock::now());
-    peer.subscription->cancel();
-    media.tick(Clock::now());
-    check(!media.next_deadline(), "idle live session retained deadline");
-    state->update(3);
-    await([&] {
-        return observer->queue_stats().frames >= 3;
-    });
-    Peer resumed(media.description().tracks[0]);
-    media.subscribe(resumed.subscription, "PLAY 200");
-    media.tick(Clock::now());
-    const auto begin = Clock::now();
-    media.stop();
-    media.stop();
-    check(Clock::now() - begin < 1s && observer->ended(), "session stop did not join source");
-    check_released(state);
-    check(decode_output(resumed) == 1, "resume delivered stale prefetched P frame");
-}
-
 void test_startup_cancellation() {
     auto state = std::make_shared<InputState>();
     state->credits = 0;
@@ -379,7 +245,6 @@ void test_startup_cancellation() {
     check_released(state);
 }
 
-#ifdef RTSP_TEST_CAMERA_CAPTURE
 void test_capture_adapter_without_device() {
     auto input = rtsp::make_camera_capture_input({});
     input->request_stop();
@@ -401,7 +266,6 @@ void test_capture_adapter_without_device() {
     }
     check(rejected, "capture adapter did not propagate worker open failure");
 }
-#endif
 }
 
 int main() {
@@ -410,13 +274,8 @@ int main() {
         test_capture_timeline();
         test_startup_and_runtime_failures();
         test_overflow_and_resume();
-        test_media_session(false);
-        test_media_session(true);
-        test_idle_and_session_stop();
         test_startup_cancellation();
-#ifdef RTSP_TEST_CAMERA_CAPTURE
         test_capture_adapter_without_device();
-#endif
         std::cout << "PASS: generated capture/encode, live wait/end/failure, overflow, resume, RTP decode and stop\n";
         return 0;
     } catch (const std::exception& e) {

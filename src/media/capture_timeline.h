@@ -5,11 +5,13 @@
 
 namespace rtsp {
 
+// 轻量值类型：复制的是同一个 T0，不重新读取时钟。
 class CaptureTimeline {
 public:
     using Clock = std::chrono::steady_clock;
 
-    explicit CaptureTimeline(Clock::time_point epoch = Clock::now()) : epoch_(epoch) {}
+    CaptureTimeline() : CaptureTimeline(Clock::now()) {}
+    explicit CaptureTimeline(Clock::time_point epoch) : epoch_(epoch) {}
 
     std::int64_t relative_us(std::int64_t steady_us) const {
         return steady_us - std::chrono::duration_cast<std::chrono::microseconds>(
@@ -19,7 +21,7 @@ public:
     Clock::time_point at(std::chrono::microseconds offset) const { return epoch_ + offset; }
 
 private:
-    const Clock::time_point epoch_;
+    Clock::time_point epoch_;
 };
 
 }  // namespace rtsp

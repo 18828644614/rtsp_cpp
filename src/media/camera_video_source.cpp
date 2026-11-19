@@ -125,7 +125,7 @@ void CameraVideoSource::produce() noexcept {
     try {
         H264Encoder encoder;
         auto encoder_config = config_.encoder;
-        encoder_config.use_capture_timeline = static_cast<bool>(config_.timeline);
+        encoder_config.use_capture_timeline = true;
         encoder.open(encoder_config);
         CameraTimeMapper mapper;
         auto last_data = std::chrono::steady_clock::now();
@@ -148,9 +148,7 @@ void CameraVideoSource::produce() noexcept {
                 break;
             }
             last_data = std::chrono::steady_clock::now();
-            if (config_.timeline) {
-                frame.capture_pts_us = mapper.map(frame, *config_.timeline);
-            }
+            frame.capture_pts_us = mapper.map(frame, config_.timeline);
             publish(encoder.encode(frame), encoder);
         }
     } catch (...) {

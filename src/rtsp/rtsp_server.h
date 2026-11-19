@@ -5,6 +5,7 @@
 #include "rtsp/runtime_options.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -21,16 +22,11 @@ class CaptureTimeline;
 
 class RtspServer {
 public:
-    RtspServer(std::string address, std::uint16_t port, std::string video_path,
-               std::string audio_path = "", RuntimeOptions options = {});
-    // 服务器接管一个视频源；所有连接共享同一个 MediaSession。
+    // 服务器拥有一份直播媒体，所有连接从中订阅。
     RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
+               std::unique_ptr<AudioSource> audio_source, CaptureTimeline timeline,
+               std::chrono::milliseconds send_buffer = std::chrono::milliseconds{150},
                RuntimeOptions options = {});
-    RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
-               std::unique_ptr<AudioSource> audio_source, RuntimeOptions options = {});
-    RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
-               std::unique_ptr<AudioSource> audio_source, std::shared_ptr<const CaptureTimeline> timeline,
-               std::chrono::milliseconds send_buffer, RuntimeOptions options = {});
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;
@@ -49,7 +45,7 @@ private:
     std::string address_;
     std::uint16_t port_;
     RuntimeOptions options_;
-    std::shared_ptr<MediaSession> media_session_;
+    std::unique_ptr<MediaSession> media_session_;  // 晚于 connections_ 析构。
     net::TcpSocket listener_;
     net::EventLoop event_loop_;
     std::vector<std::unique_ptr<RtspServerConnection>> connections_;

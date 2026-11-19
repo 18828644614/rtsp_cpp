@@ -1,6 +1,4 @@
 #include "media/h264_encoder.h"
-#include "media/h264_file_reader.h"
-#include "media/h264_file_writer.h"
 #include "sdp/session_description.h"
 
 extern "C" {
@@ -340,9 +338,6 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
     check(encoder.timestamp_mode() == rtsp::EncoderTimestampMode::Source && encoder.timestamp_fallbacks() == 0,
         "source timing unexpectedly used fallback");
     check(!rtsp::make_h264_fmtp(encoder.sps(), encoder.pps()).empty(), "SPS/PPS cannot generate SDP fmtp");
-    rtsp::H264FileWriter writer;
-    const std::string path = "h264-encoder-tests-" + format + "-" + std::to_string(fps_num) + ".h264";
-    writer.open(path);
     Decoder decoder(config);
     bool multiple_slices = false;
     for (int index = 0; index < frames; ++index) {
@@ -363,7 +358,6 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
             idr = idr || type == 5;
             sps = sps || type == 7;
             pps = pps || type == 8;
-            writer.write(nalu);
         }
         check(aud == 1 && (static_cast<unsigned char>(unit.nalus.front()[0]) & 0x1f) == 9 && slices > 0,
             "AU boundary or original NALU representation is invalid");
@@ -372,7 +366,6 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
         check(!idr || (sps && pps), "IDR cannot be decoded without earlier parameter sets");
         decoder.submit(unit, index);
     }
-    writer.close();
     decoder.finish(frames);
     check(multiple_slices, "test did not exercise an access unit with multiple slices");
     // 中途从第二个 IDR 启动一个全新解码器，验证重复参数集确实可用。
@@ -381,16 +374,6 @@ void stream_test(const std::string& format, int fps_num, int fps_den) {
         late_decoder.submit(units[index], index);
     }
     late_decoder.finish(frames - config.gop);
-    rtsp::H264FileReader reader;
-    reader.open(path);
-    check(reader.frame_count() == frames, "Annex-B file is incompatible with the existing AUD file reader");
-    for (const auto& unit : units) {
-        rtsp::H264AccessUnit read;
-        check(reader.read(read) && read.nalus == unit.nalus && read.is_keyframe == unit.is_keyframe,
-            "file round-trip changed AU boundaries or NALU bytes");
-    }
-    rtsp::H264AccessUnit end;
-    check(!reader.read(end), "file reader returned extra pictures");
 }
 
 void timing_tests() {

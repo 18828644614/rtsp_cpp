@@ -7,7 +7,7 @@
 #include <cmath>
 #include <condition_variable>
 
-namespace rtsp::app {
+namespace rtsp::test {
 
 class SyntheticAudioInput final : public AudioFrameInput {
 public:

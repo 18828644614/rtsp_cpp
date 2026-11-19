@@ -1,8 +1,5 @@
 #include "app/server_options.h"
-#include "media/media_session.h"
 
-#include <filesystem>
-#include <fstream>
 #include <iostream>
 
 namespace {
@@ -11,6 +8,7 @@ void check(bool ok) {
         throw std::runtime_error("server options mismatch");
     }
 }
+
 void rejects(const std::vector<std::string>& args) {
     try {
         rtsp::app::parse_server_options(args);
@@ -19,65 +17,45 @@ void rejects(const std::vector<std::string>& args) {
     }
     throw std::runtime_error("accepted invalid server options");
 }
-
-void unicode_file_paths() {
-    // 入口将宽字符参数转换成 UTF-8，文件读取也必须使用 UTF-8 路径。
-    const std::string video = "server-中文.h264";
-    const std::string audio = "server-中文.aac";
-    const auto video_path = std::filesystem::u8path(video);
-    const auto audio_path = std::filesystem::u8path(audio);
-    try {
-        const std::string h264("\0\0\0\1\x09\xf0\0\0\0\1\x67\x64\0\x1f\0\0\0\1\x68\xee\0\0\0\1\x65\xab", 26);
-        const std::string aac("\xff\xf1\x4c\x80\x01\x5f\xfc\x11\x22\x33", 10);
-        std::ofstream(video_path, std::ios::binary).write(h264.data(), h264.size());
-        std::ofstream(audio_path, std::ios::binary).write(aac.data(), aac.size());
-        rtsp::MediaSession media(video, audio);
-        check(media.description().tracks.size() == 2);
-    } catch (...) {
-        std::filesystem::remove(video_path);
-        std::filesystem::remove(audio_path);
-        throw;
-    }
-    std::filesystem::remove(video_path);
-    std::filesystem::remove(audio_path);
-}
 }
 
 int main() {
     try {
-        auto options = rtsp::app::parse_server_options({});
-        check(!options.camera() && options.port == 8554 && options.video_path == "samples/sample.h264");
-        options = rtsp::app::parse_server_options({"1234", "0.0.0.0", "-", "a.aac"});
-        check(options.port == 1234 && options.address == "0.0.0.0" && options.video_path.empty()
-              && options.audio_path == "a.aac");
-        options = rtsp::app::parse_server_options({"8554", "127.0.0.1", "中文路径.h264"});
-        check(options.video_path == "中文路径.h264");
-        check(rtsp::app::parse_server_options({"--help"}).help);
-        check(rtsp::app::parse_server_options({"--list-cameras"}).list_cameras);
-        check(rtsp::app::parse_server_options({"--list-microphones"}).list_microphones);
-        options = rtsp::app::parse_server_options({"--microphone", "0", "--port", "9000"});
-        check(options.audio() && !options.camera() && options.microphone_index == 0 &&
-              options.video_path.empty() && options.port == 9000);
-        check(rtsp::app::parse_server_options({"--microphone-device", "USB 麦克风"}).microphone_device == "USB 麦克风");
-        check(rtsp::app::parse_server_options({"--synthetic-audio"}).synthetic_audio);
-        options = rtsp::app::parse_server_options({"--camera", "0", "--microphone", "1"});
-        check(options.camera_index == 0 && options.microphone_index == 1 && options.send_buffer_ms == 150);
-        options = rtsp::app::parse_server_options({"--synthetic-video", "--synthetic-audio",
-            "--send-buffer-ms", "0", "--fps", "25"});
-        check(options.synthetic_video && options.synthetic_audio && options.gop == 25 && options.send_buffer_ms == 0);
-        options = rtsp::app::parse_server_options({"--camera", "0", "--fps", "60", "--bind", "0.0.0.0"});
-        check(options.camera() && options.camera_index == 0 && options.gop == 60 && options.video_path.empty());
-        options = rtsp::app::parse_server_options({"--device", "USB 摄像头", "--width", "640", "--height", "480",
-            "--fps", "25", "--bitrate", "1000000", "--gop", "50", "--pixel-format", "bgr24", "--port", "9000"});
-        check(options.device_name == "USB 摄像头" && options.width == 640 && options.height == 480
-              && options.fps == 25 && options.bitrate == 1000000 && options.gop == 50
-              && options.pixel_format == "bgr24" && options.port == 9000);
-        for (const auto& args : std::vector<std::vector<std::string>>{
-                 {"--camera"}, {"--camera", "--fps", "30"}, {"--camera", "-1"}, {"--camera", "1x"}, {"--device", ""}, {"--camera", "0", "--device", "x"}, {"--fps", "30"}, {"--camera", "0", "--width", "641"}, {"--camera", "0", "--height", "0"}, {"--camera", "0", "--fps", "241"}, {"--camera", "0", "--bitrate", "2147483648"}, {"--camera", "0", "--gop", "0"}, {"--camera", "0", "--pixel-format", "mjpeg"}, {"--camera", "0", "--port", "0"}, {"--camera", "0", "--port", "999999999999999999"}, {"--camera", "0", "--camera", "1"}, {"--camera", "0", "sample.h264"}, {"8554", "127.0.0.1", "--camera", "0"}, {"--list-cameras", "--camera", "0"}, {"--microphone", "-1"}, {"--microphone"}, {"--microphone-device", ""}, {"--camera", "0", "--synthetic-video"}, {"--synthetic-audio", "--send-buffer-ms", "150"}, {"--synthetic-video", "--synthetic-audio", "--send-buffer-ms", "-1"}, {"--synthetic-video", "--synthetic-audio", "--send-buffer-ms", "201"}, {"--microphone", "0", "--microphone-device", "x"}, {"--synthetic-audio", "--microphone", "0"}, {"--synthetic-audio", "--fps", "30"}, {"--list-microphones", "--port", "9000"}, {"--not-an-option"}, {"1", "2", "3", "4", "5"}}) {
+        using rtsp::app::parse_server_options;
+        using rtsp::app::ServerAction;
+        check(parse_server_options({}).action == ServerAction::Help);
+        check(parse_server_options({"--help"}).action == ServerAction::Help);
+        check(parse_server_options({"--list-cameras"}).action == ServerAction::ListCameras);
+        check(parse_server_options({"--list-microphones"}).action == ServerAction::ListMicrophones);
+
+        const std::vector<std::string> devices{"--camera", "0", "--microphone", "1"};
+        const auto defaults = parse_server_options(devices);
+        check(defaults.action == ServerAction::Stream && defaults.camera_index == 0 &&
+              defaults.microphone_index == 1 && defaults.port == 8554 && defaults.send_buffer_ms == 150);
+        const auto custom = parse_server_options({"--microphone", "2", "--camera", "3",
+            "--width", "640", "--height", "480", "--fps", "25", "--bitrate", "1000000",
+            "--pixel-format", "bgr24", "--bind", "0.0.0.0", "--port", "9000", "--send-buffer-ms", "0"});
+        check(custom.camera_index == 3 && custom.microphone_index == 2 && custom.width == 640 &&
+              custom.height == 480 && custom.fps == 25 && custom.gop == 25 &&
+              custom.bitrate == 1000000 && custom.pixel_format == "bgr24" &&
+              custom.address == "0.0.0.0" && custom.port == 9000 && custom.send_buffer_ms == 0);
+        for (const auto& invalid : std::vector<std::vector<std::string>>{
+                 {"--width", "641"}, {"--height", "0"}, {"--fps", "241"},
+                 {"--bitrate", "2147483648"}, {"--gop", "0"}, {"--pixel-format", "mjpeg"},
+                 {"--port", "0"}, {"--port", "999999999999999999"}, {"--send-buffer-ms", "201"},
+                 {"--camera", "1"}, {"--synthetic-video"}, {"--synthetic-audio"},
+                 {"--list-cameras"}, {"--list-microphones"}, {"--help"}, {"--port"}, {"--bind", ""}}) {
+            auto args = devices;
+            args.insert(args.end(), invalid.begin(), invalid.end());
             rejects(args);
         }
-        unicode_file_paths();
-        std::cout << "PASS: file compatibility, camera selection, Unicode and invalid options\n";
+        for (const auto& invalid : std::vector<std::vector<std::string>>{
+                 {"--camera", "0"}, {"--microphone", "0"}, {"--microphone", "-1"},
+                 {"--camera", "1x"}, {"--camera", "-0"}, {"--camera", "--fps", "30"},
+                 {"8554", "127.0.0.1", "input.h264", "input.aac"}}) {
+            rejects(invalid);
+        }
+        std::cout << "PASS: only a camera and microphone pair can start streaming\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

@@ -1,4 +1,4 @@
-#include "app/synthetic_audio_input.h"
+#include "support/synthetic_audio_input.h"
 #include "media/aac_encoder.h"
 #include "media/audio_resampler.h"
 
@@ -116,7 +116,7 @@ void encode_case(std::int64_t count, int rate, int channels) {
     const auto append = [&](std::vector<rtsp::AacAccessUnit> output) {
         units.insert(units.end(), std::make_move_iterator(output.begin()), std::make_move_iterator(output.end()));
     };
-    rtsp::app::SyntheticAudioInput input(count, rate, channels);
+    rtsp::test::SyntheticAudioInput input(count, rate, channels);
     if (count > 0) {
         rtsp::AudioFrame frame;
         while (input.read(frame, std::chrono::milliseconds(0)) == rtsp::AudioInputResult::FrameReady) {

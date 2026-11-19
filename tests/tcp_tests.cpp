@@ -1,4 +1,3 @@
-#include "app/command_line.h"
 #include "net/tcp_socket.h"
 
 #include <exception>
@@ -16,18 +15,6 @@ void check(bool condition, const char* message) {
 }
 
 void test_arguments() {
-    check(rtsp::app::parse_port("8554") == 8554, "valid port failed");
-    check(rtsp::app::parse_port("65535") == 65535, "maximum port failed");
-    for (const char* text : {"", "0", "-1", "65536", "8554abc", "999999999999"}) {
-        bool rejected = false;
-        try {
-            rtsp::app::parse_port(text);
-        } catch (const std::invalid_argument&) {
-            rejected = true;
-        }
-        check(rejected, "invalid port was accepted");
-    }
-
     TcpSocket client;
     bool rejected = false;
     try {
@@ -128,7 +115,7 @@ void test_transfer() {
 int main() {
     try {
         test_arguments();
-        std::cout << "PASS: ports, invalid address and closed socket\n";
+        std::cout << "PASS: invalid address and closed socket\n";
         test_transfer();
         std::cout << "PASS: binary echo, half-close, EOF and automatic cleanup\n";
         return 0;

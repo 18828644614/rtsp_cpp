@@ -1,10 +1,7 @@
-#include "app/synthetic_camera_frame.h"
-#include "media/audio_source.h"
-#ifdef RTSP_TEST_DUAL_LIVE
-#include "app/synthetic_audio_input.h"
-#endif
+#include "support/synthetic_camera_frame.h"
+#include "support/synthetic_audio_input.h"
 #include "media/camera_video_source.h"
-#include "media/h264_depacketizer.h"
+#include "support/h264_depacketizer.h"
 #include "rtp/rtcp_packet.h"
 #include "rtsp/rtsp_server.h"
 #include "rtsp/rtsp_session_utils.h"
@@ -16,7 +13,6 @@ extern "C" {
 
 #include <algorithm>
 #include <condition_variable>
-#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -61,9 +57,8 @@ struct InputState {
 // 第一帧用于源启动握手，后续帧既受测试许可控制，也按真实帧率推进。
 class PacedInput final : public rtsp::CameraFrameInput {
 public:
-    PacedInput(std::shared_ptr<InputState> state, rtsp::H264EncoderConfig config, bool noise,
-               bool capture_timing)
-        : state_(std::move(state)), config_(config), noise_(noise), capture_timing_(capture_timing) {}
+    PacedInput(std::shared_ptr<InputState> state, rtsp::H264EncoderConfig config, bool noise)
+        : state_(std::move(state)), config_(config), noise_(noise) {}
     rtsp::CameraInputResult read(rtsp::CameraFrame& frame, std::chrono::milliseconds timeout) override {
         const auto deadline = Clock::now() + timeout;
         std::unique_lock<std::mutex> lock(state_->mutex);
@@ -86,13 +81,11 @@ public:
             state_->wake.wait_until(lock, index_ < state_->limit ? std::min(deadline, due_) : deadline);
         }
         lock.unlock();
-        frame = rtsp::app::synthetic_camera_frame(config_.width, config_.height,
+        frame = rtsp::test::synthetic_camera_frame(config_.width, config_.height,
             config_.pixel_format, config_.fps_num, 1, index_);
-        if (capture_timing_) {
-            frame.source_pts.reset();
-            frame.arrival_steady_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                Clock::now().time_since_epoch()).count();
-        }
+        frame.source_pts.reset();
+        frame.arrival_steady_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now().time_since_epoch()).count();
         if (noise_) {
             std::uint32_t bits = 1234567u + static_cast<std::uint32_t>(index_);
             for (int y = 0; y < config_.height; ++y) {
@@ -125,7 +118,6 @@ private:
     std::shared_ptr<InputState> state_;
     const rtsp::H264EncoderConfig config_;
     const bool noise_;
-    const bool capture_timing_;
     int index_ = 0;
     Clock::time_point due_ = Clock::now();
 };
@@ -140,21 +132,29 @@ rtsp::CameraVideoSourceConfig configuration(bool noise = false) {
     config.read_timeout = 10ms;
     return config;
 }
-std::unique_ptr<rtsp::CameraVideoSource> source(const std::shared_ptr<InputState>& state, bool noise = false,
-    std::shared_ptr<const rtsp::CaptureTimeline> timeline = nullptr) {
+std::unique_ptr<rtsp::CameraVideoSource> video_source(const std::shared_ptr<InputState>& state,
+    bool noise, rtsp::CaptureTimeline timeline) {
     auto config = configuration(noise);
-    config.timeline = std::move(timeline);
+    config.timeline = timeline;
     return std::make_unique<rtsp::CameraVideoSource>(
-        std::make_unique<PacedInput>(state, config.encoder, noise, static_cast<bool>(config.timeline)), config);
+        std::make_unique<PacedInput>(state, config.encoder, noise), config);
+}
+
+std::unique_ptr<rtsp::MicrophoneAudioSource> audio_source(rtsp::CaptureTimeline timeline) {
+    rtsp::MicrophoneAudioSourceConfig config;
+    config.timeline = timeline;
+    return std::make_unique<rtsp::MicrophoneAudioSource>(
+        std::make_unique<rtsp::test::SyntheticAudioInput>(0, 48000, 1, true), config);
 }
 
 struct Server {
     rtsp::RtspServer server;
     std::thread worker;
     std::exception_ptr failure;
-    explicit Server(std::unique_ptr<rtsp::VideoSource> input, std::unique_ptr<rtsp::AudioSource> audio = nullptr,
-                    std::shared_ptr<const rtsp::CaptureTimeline> timeline = nullptr)
-        : server("127.0.0.1", 0, std::move(input), std::move(audio), std::move(timeline), 150ms, runtime()) {
+    explicit Server(const std::shared_ptr<InputState>& state, bool noise = false,
+                    rtsp::CaptureTimeline timeline = rtsp::CaptureTimeline{})
+        : server("127.0.0.1", 0, video_source(state, noise, timeline), audio_source(timeline),
+                 timeline, 150ms, runtime()) {
         worker = std::thread([this] {
             try {
                 server.run();
@@ -208,7 +208,6 @@ public:
     std::vector<std::uint64_t> pictures;
     std::vector<std::uint32_t> timestamps;
     std::uint32_t ssrc = 0;
-    std::string annex_b;
     std::string fmtp;
 
     Peer(std::uint16_t port, bool slow = false, int width = 160, int height = 96)
@@ -259,10 +258,10 @@ public:
             receive(20);
         }
     }
-    void setup(bool dual = false) {
+    void setup() {
         const auto description = exchange("DESCRIBE");
         const auto sdp = rtsp::parse_sdp(description.body);
-        check(sdp.tracks.size() == (dual ? 2u : 1u) && sdp.tracks[0].clock_rate == 90000,
+        check(sdp.tracks.size() == 2 && sdp.tracks[0].clock_rate == 90000,
               "camera SDP track mismatch");
         fmtp = sdp.tracks[0].fmtp;
         check(fmtp.find("profile-level-id=") != std::string::npos
@@ -270,13 +269,11 @@ public:
         const auto response = exchange("SETUP", "/trackID=0",
                                        "Transport: RTP/AVP/TCP;unicast;interleaved=6-7\r\n");
         session_ = "Session: " + rtsp::session_id_from_header(response.header("Session")) + "\r\n";
-        if (dual) {
-            const auto& audio = sdp.tracks[1];
-            check(audio.encoding == "MPEG4-GENERIC" && audio.clock_rate == 48000 && audio.channels == 1,
-                  "live AAC SDP mismatch");
-            exchange("SETUP", "/trackID=1", session_ +
-                     "Transport: RTP/AVP/TCP;unicast;interleaved=8-9\r\n");
-        }
+        const auto& audio = sdp.tracks[1];
+        check(audio.encoding == "MPEG4-GENERIC" && audio.clock_rate == 48000 && audio.channels == 1,
+              "live AAC SDP mismatch");
+        exchange("SETUP", "/trackID=1", session_ +
+                 "Transport: RTP/AVP/TCP;unicast;interleaved=8-9\r\n");
     }
     void play(int expected = 200) {
         const auto response = exchange("PLAY", "", session_ + "Range: npt=0.000-\r\n", expected);
@@ -302,9 +299,9 @@ public:
             consume(item);
         }
     }
-    void wait_units(int count) {
+    void wait_units(int count, int audio_count = 0) {
         const auto deadline = Clock::now() + 4s;
-        while (units < count) {
+        while (units < count || audio_units < audio_count) {
             check(Clock::now() < deadline && !eof, "camera frames timed out");
             pump(10);
         }
@@ -419,7 +416,6 @@ private:
         check(avcodec_send_packet(decoder_, packet_) >= 0, "submit network AU failed");
         av_packet_unref(packet_);
         decode_frames();
-        annex_b += au_;
         au_.clear();
         timestamp_.reset();
         idr_ = false;
@@ -453,90 +449,52 @@ void drain(Peer& a, Peer* b = nullptr) {
 
 void test_shared_live_stream() {
     const auto state = std::make_shared<InputState>();
-    auto input = source(state);
-    const auto expected_fmtp = input->track().fmtp;
-    Server server(std::move(input));
-    Peer a(server.server.local_port());
-    a.setup();
-    a.play();
-    a.wait_units(1);
+    Server server(state);
+    const auto port = server.server.local_port();
+    Peer first(port);
+    first.setup();
+    first.play();
+    first.wait_units(1, 1);
     std::this_thread::sleep_for(100ms);
-    a.keepalive();
-    check(a.units == 1 && !a.eof && !a.byes && a.fmtp == expected_fmtp, "Waiting treated as EOF or SDP changed");
+    first.keepalive();
+    check(first.units == 1 && !first.eof, "temporary camera wait ended the stream");
     state->allow(4);
-    a.wait_units(4);
-    Peer b(server.server.local_port());
-    b.setup();
-    b.play();
+    first.wait_units(4);
+    Peer late(port);
+    late.setup();
+    late.play();
     state->allow(6);
-    a.wait_units(6);
-    b.pump(10);
-    check(b.units == 0, "late client received P frames before IDR");
-    state->allow(15, true);
-    drain(a, &b);
-    a.finish();
-    b.finish();
-    check(a.units == 15 && b.units == 9 && a.byes == 1 && b.byes == 1, "shared camera frame/EOF counts mismatch");
-    check(a.ssrc != b.ssrc, "clients shared RTP state");
-    check(std::equal(b.pictures.begin(), b.pictures.end(), a.pictures.begin() + 6), "late client decoded different pictures");
-    for (std::size_t index = 0; index < a.timestamps.size(); ++index) {
-        check(a.timestamps[index] == index * 3000, "camera timing fell back to file 25fps");
-    }
-    std::ofstream("camera-rtsp-a.h264", std::ios::binary).write(a.annex_b.data(), a.annex_b.size());
-    std::ofstream("camera-rtsp-b.h264", std::ios::binary).write(b.annex_b.data(), b.annex_b.size());
-    Peer ended(server.server.local_port());
-    ended.setup();
-    ended.play(455);
-    server.stop();
-    check(state->closed.load(), "ended camera input leaked");
-}
+    first.wait_units(6);
+    late.pump(10);
+    check(late.units == 0 && late.audio_units == 0, "late client started before the next IDR");
+    state->allow(15);
+    first.wait_units(15);
+    late.wait_units(9, 1);
+    check(first.ssrc != late.ssrc, "clients shared RTP state");
+    check(std::equal(late.pictures.begin(), late.pictures.end(), first.pictures.begin() + 6),
+          "late client decoded different pictures");
 
-void test_idle_resume_and_teardown() {
-    const auto state = std::make_shared<InputState>();
-    auto input = source(state);
-    const auto* observer = input.get();
-    Server server(std::move(input));
-    Peer a(server.server.local_port());
-    a.setup();
-    a.play();
-    a.wait_units(1);
-    Peer b(server.server.local_port());
-    b.setup();
-    b.play();
-    a.teardown();
-    drain(a);
-    a.finish();
-    state->allow(8);
-    b.wait_units(2);
-    check(!b.eof, "TEARDOWN stopped another camera subscriber");
-    b.teardown();
-    drain(b);
-    b.finish();
-    await([&] {
-        return server.server.connection_count() == 0;
-    });
-    state->allow(14);
-    await([&] {
-        return state->produced.load() == 14 && observer->queue_stats().frames == 6;
-    });
-    Peer resumed(server.server.local_port());
-    resumed.setup();
-    resumed.play();
-    resumed.wait_units(2);
-    state->allow(18, true);
-    drain(resumed);
-    resumed.finish();
-    check(resumed.units == 6, "idle camera replayed stale frames instead of latest IDR");
+    late.teardown();
+    drain(late);
+    late.finish();
+    check(late.byes == 2, "TEARDOWN did not send BYE for both tracks");
+    state->allow(18);
+    first.wait_units(18);
+    server.server.stop();
+    drain(first);
+    first.finish();
+    check(first.byes == 2, "stop did not send BYE for both tracks");
     server.stop();
+    check(state->closed.load(), "camera worker did not close");
 }
 
 void test_stop_and_failure(bool failure) {
     const auto state = std::make_shared<InputState>();
-    Server server(source(state));
+    Server server(state);
     Peer peer(server.server.local_port());
     peer.setup();
     peer.play();
-    peer.wait_units(1);
+    peer.wait_units(1, 1);
     if (failure) {
         state->allow(1, false, true);
     } else {
@@ -545,7 +503,7 @@ void test_stop_and_failure(bool failure) {
     drain(peer);
     if (!failure) {
         peer.finish();
-        check(peer.byes == 1, "server stop lost final BYE");
+        check(peer.byes == 2, "server stop lost final BYE");
     }
     await([&] {
         return state->closed.load();
@@ -564,7 +522,10 @@ void test_bind_failure() {
     rtsp::net::TcpSocket occupied;
     occupied.listen("127.0.0.1", 0);
     const auto state = std::make_shared<InputState>();
-    rtsp::RtspServer server("127.0.0.1", occupied.local_port(), source(state));
+    const rtsp::CaptureTimeline timeline;
+    auto video = video_source(state, false, timeline);
+    rtsp::RtspServer server("127.0.0.1", occupied.local_port(),
+                            std::move(video), audio_source(timeline), timeline);
     bool rejected = false;
     try {
         server.run();
@@ -574,52 +535,18 @@ void test_bind_failure() {
     check(rejected && state->closed.load(), "bind failure leaked camera worker");
 }
 
-void test_slow_client() {
-    const auto state = std::make_shared<InputState>();
-    Server server(source(state, true));
-    Peer slow(server.server.local_port(), true, 640, 360);
-    slow.setup();
-    slow.play();
-    Peer healthy(server.server.local_port(), false, 640, 360);
-    healthy.setup();
-    healthy.play();
-    state->allow(600);
-    const auto deadline = Clock::now() + 12s;
-    while (server.server.connection_count() != 1 || healthy.units < 30) {
-        check(Clock::now() < deadline, "slow client was not isolated from live camera");
-        healthy.pump(1);
-        check(!healthy.eof, "healthy live client closed behind slow client");
-    }
-    const auto before = healthy.units;
-    healthy.wait_units(before + 6);
-    check(healthy.fragmented, "large camera NALUs did not exercise FU-A");
-    healthy.keepalive();
-    server.server.stop();
-    drain(healthy);
-    healthy.finish();
-    server.stop();
-    check(state->closed.load(), "slow-client shutdown leaked camera input");
-}
-
-#ifdef RTSP_TEST_DUAL_LIVE
 void test_dual_live() {
-    const auto timeline = std::make_shared<const rtsp::CaptureTimeline>();
     const auto state = std::make_shared<InputState>();
-    auto video = source(state, true, timeline);
-    rtsp::MicrophoneAudioSourceConfig config;
-    config.timeline = timeline;
-    auto audio = std::make_unique<rtsp::MicrophoneAudioSource>(
-        std::make_unique<rtsp::app::SyntheticAudioInput>(0, 48000, 1, true), config);
-    Server server(std::move(video), std::move(audio), timeline);
+    Server server(state, true);
     const auto port = server.server.local_port();
 
     Peer slow(port, true, 640, 360);
-    slow.setup(true);
+    slow.setup();
     slow.play();
     state->allow(600);
     await([&] { return slow.socket.wait_readable(0); });
     Peer late(port, false, 640, 360);
-    late.setup(true);
+    late.setup();
     late.play();
     late.wait_units(2);
 
@@ -637,7 +564,7 @@ void test_dual_live() {
     const int before_idle = state->produced.load();
     await([&] { return state->produced.load() >= before_idle + 12; });
     Peer resumed(port, false, 640, 360);
-    resumed.setup(true);
+    resumed.setup();
     resumed.play();
     resumed.wait_units(8);
     check(resumed.audio_units > 0, "idle resume lost AAC");
@@ -646,7 +573,6 @@ void test_dual_live() {
     server.stop();
     check(state->closed.load(), "dual-track shutdown leaked the camera input");
 }
-#endif
 }
 
 int main(int argc, char* argv[]) {
@@ -654,9 +580,9 @@ int main(int argc, char* argv[]) {
         // 仅测试程序提供这个入口，供独立 FFmpeg/ffplay 做无设备网络验收。
         if (argc == 2 && std::string(argv[1]) == "--serve") {
             const auto state = std::make_shared<InputState>();
-            Server server(source(state));
+            Server server(state);
             state->allow(100000);
-            std::cout << "camera_test_url=rtsp://127.0.0.1:" << server.server.local_port() << "/live" << std::endl;
+            std::cout << "live_test_url=rtsp://127.0.0.1:" << server.server.local_port() << "/live" << std::endl;
             const auto until = Clock::now() + 12s;
             while (Clock::now() < until) {
                 std::this_thread::sleep_for(20ms);
@@ -666,15 +592,11 @@ int main(int argc, char* argv[]) {
         }
         check(argc == 1, "unknown camera test argument");
         test_shared_live_stream();
-        test_idle_resume_and_teardown();
         test_stop_and_failure(false);
         test_stop_and_failure(true);
         test_bind_failure();
-        test_slow_client();
-#ifdef RTSP_TEST_DUAL_LIVE
         test_dual_live();
-#endif
-        std::cout << "PASS: camera TCP SDP, IDR, late join, decode, resume, slow client, failure and stop\n";
+        std::cout << "PASS: camera + microphone RTSP/TCP, late join, slow client, resume, failure and stop\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

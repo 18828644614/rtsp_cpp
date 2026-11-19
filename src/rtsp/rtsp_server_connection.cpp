@@ -22,21 +22,14 @@ std::uint32_t make_ssrc() {
     return value;
 }
 
-const SessionDescription& require_description(const std::shared_ptr<MediaSession>& media) {
-    if (!media) {
-        throw std::invalid_argument("connection requires a media session");
-    }
-    return media->description();
-}
-
 }  // namespace
 
-RtspServerConnection::RtspServerConnection(std::shared_ptr<MediaSession> media_session,
+RtspServerConnection::RtspServerConnection(MediaSession& media_session,
                                            RuntimeOptions options)
-    : media_session_(std::move(media_session)),
+    : media_session_(media_session),
       session_id_(std::to_string(next_session_id.fetch_add(1, std::memory_order_relaxed))),
       outbound_queue_(std::make_shared<net::OutboundQueue>()),
-      session_(session_id_, require_description(media_session_), options.session_timeout_seconds),
+      session_(session_id_, media_session.description(), options.session_timeout_seconds),
       options_(options) {
     if (options_.rtcp_interval.count() <= 0 || options_.control_idle_timeout.count() <= 0
         || options_.send_stall_timeout.count() <= 0 || options_.drain_timeout.count() <= 0) {
@@ -165,7 +158,7 @@ void RtspServerConnection::handle_item(const RtspStreamItem& item) {
     bool commit = true;
     if (request.method == "PLAY" && response.status_code == 200) {
         auto candidate = std::make_shared<MediaSubscription>(outbound_queue_);
-        const auto& description = media_session_->description();
+        const auto& description = media_session_.description();
         const auto& tracks = next_session.tracks();
         for (std::size_t i = 0; i < tracks.size(); ++i) {
             if (tracks[i].setup) {
@@ -176,8 +169,7 @@ void RtspServerConnection::handle_item(const RtspStreamItem& item) {
         }
         const auto base = request.uri.substr(0, request.uri.find('/', 7)) + "/live/";
         response.set_header("RTP-Info", candidate->rtp_info(base));
-        const auto result = media_session_->subscribe(
-            candidate, serialize_rtsp_message(response), false);
+        const auto result = media_session_.subscribe(candidate, serialize_rtsp_message(response));
         if (result == SubscribeResult::Started) {
             subscription_ = std::move(candidate);
             response_queued = true;
@@ -190,9 +182,8 @@ void RtspServerConnection::handle_item(const RtspStreamItem& item) {
                                                       return header.name == "RTP-Info";
                                                   }),
                                    response.headers.end());
-            response.status_code = result == SubscribeResult::InvalidRange ? 457 : 455;
-            response.reason = result == SubscribeResult::InvalidRange
-                ? "Invalid Range" : "Method Not Valid in This State";
+            response.status_code = 455;
+            response.reason = "Method Not Valid in This State";
         }
     }
     if (next_session.state() == SessionClosed && subscription_) {
@@ -260,7 +251,7 @@ void RtspServerConnection::on_writable() {
                 has_sending_ = true;
                 send_offset_ = 0;
                 if (sending_.kind == net::OutboundKind::Rtcp && subscription_) {
-                    auto wire = subscription_->prepare_rtcp(sending_, media_session_->clock(), Clock::now());
+                    auto wire = subscription_->prepare_rtcp(sending_, media_session_.clock(), Clock::now());
                     if (wire.size() != sending_.wire.size()) {
                         throw std::logic_error("RTCP snapshot changed reserved queue size");
                     }

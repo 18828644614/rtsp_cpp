@@ -10,7 +10,7 @@ enum H264DepacketizeResult {
     H264Dropped   // 缺少开始片或连续性被破坏，丢弃未完成 NALU。
 };
 
-// 一个对象用于一路 H.264 轨道，不负责重排乱序包或识别图像边界。
+// 测试接收端：重组一路 H.264 轨道，不重排乱序包或识别图像边界。
 class H264Depacketizer {
 public:
     // 每次先清空 nalus；格式错误时抛异常并清空内部重组状态。

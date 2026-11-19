@@ -1,5 +1,30 @@
 # 错误记录（Errors）
 
+## [ERR-20261119-LIVE] live-only-build-and-verification
+
+**Logged**: 2026-11-19
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### 摘要（Summary）
+切换为固定双轨后，长补丁、聚合初始化和外部双流验证各有一处工具或测试边界需要调整。
+
+### 原始错误（Error）
+- PowerShell 的 rg 正则前瞻或文件通配符报错；改成普通匹配和目录过滤。
+- Windows 进程参数过长：`ENAMETOOLONG`；按变更区拆小补丁。
+- MSVC 清理构造与测试依赖时报告 `C2512`、`C1083` 和测试符号缺失；拆分默认构造与显式 T0 构造，修复测试内部引用和 FFmpeg 头文件链接。
+- `RuntimeError: unexpected frame counts: a=55, b=17`；单个 FFmpeg 输出同时限制音频与视频帧数，某轨先到上限会结束整个输出。
+
+### 建议修复（Suggested Fix）
+双轨同一个 FFmpeg 输出只用视频帧数控制时长，音频另外断言最小解码量；文件模式删除后逐个重编可保留的协议测试。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: CMakeLists.txt, src/media/capture_timeline.h, tests/verify_camera_rtsp.py
+
+---
+
 ## [ERR-20261027-001] runtime-test-parameter-set-comparison
 
 **Logged**: 2026-10-27

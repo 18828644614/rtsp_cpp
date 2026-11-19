@@ -1,9 +1,8 @@
 #include "media/media_session.h"
 #include "media/media_time.h"
-#include "media/file_video_source.h"
-#include "media/file_audio_source.h"
 #include "rtsp/rtsp_stream_parser.h"
 
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <stdexcept>
@@ -12,6 +11,9 @@
 namespace rtsp {
 namespace {
 constexpr std::chrono::milliseconds max_live_lateness{50};
+constexpr std::chrono::milliseconds input_retry{5};
+constexpr std::size_t video_track = 0;
+constexpr std::size_t audio_track = 1;
 }
 
 MediaSubscription::MediaSubscription(std::shared_ptr<net::OutboundQueue> queue)
@@ -260,36 +262,18 @@ void MediaSubscription::finish(bool failed) {
     queue_->close();
 }
 
-MediaSession::MediaSession(const std::string& video_path, const std::string& audio_path)
-    : MediaSession(video_path.empty() ? nullptr : std::make_unique<FileVideoSource>(video_path),
-                   audio_path) {}
-
-MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source, const std::string& audio_path)
-    : MediaSession(std::move(video_source),
-                   audio_path.empty() ? nullptr : std::make_unique<FileAudioSource>(audio_path)) {}
-
 MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source,
                            std::unique_ptr<AudioSource> audio_source,
-                           std::shared_ptr<const CaptureTimeline> timeline,
+                           CaptureTimeline timeline,
                            std::chrono::milliseconds send_buffer)
     : video_source_(std::move(video_source)), audio_source_(std::move(audio_source)),
-      timeline_(std::move(timeline)), send_buffer_(send_buffer) {
-    if (timeline_ && (send_buffer_.count() < 0 || (video_source_ && !video_source_->is_live()) ||
-                      (audio_source_ && !audio_source_->is_live()))) {
-        throw std::invalid_argument("capture timeline requires live sources and a nonnegative send buffer");
+      timeline_(timeline), send_buffer_(send_buffer) {
+    if (!video_source_ || !audio_source_ || send_buffer_.count() < 0) {
+        throw std::invalid_argument("live session requires camera, microphone and a nonnegative send buffer");
     }
-    description_.tracks.clear();
-    if (video_source_) {
-        video_track_ = description_.tracks.size();
-        description_.tracks.push_back(video_source_->track());
-    }
-    if (audio_source_) {
-        audio_track_ = description_.tracks.size();
-        description_.tracks.push_back(audio_source_->track());
-    }
-    if (description_.tracks.empty()) {
-        throw std::invalid_argument("provide a video or audio source");
-    }
+    video_source_->check_health();
+    audio_source_->check_health();
+    description_.tracks = {video_source_->track(), audio_source_->track()};
 }
 
 MediaSession::~MediaSession() {
@@ -301,15 +285,12 @@ const SessionDescription& MediaSession::description() const {
 }
 
 SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>& subscription,
-                                        const std::string& play_response, bool from_start) {
+                                        const std::string& play_response) {
     if (!subscription) {
         throw std::invalid_argument("expected a media subscription");
     }
     if (ended_) {
         return SubscribeResult::Ended;
-    }
-    if (from_start && started_) {
-        return SubscribeResult::InvalidRange;
     }
     bool had_active = false;
     for (const auto& weak : subscribers_) {
@@ -325,21 +306,11 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
     }
 
     if (!had_active) {
-        if (video_source_ && video_source_->is_live()) {
-            video_.reset();
-            video_source_->resume();
-            waiting_for_idr_ = static_cast<bool>(timeline_);
-        }
-        if (audio_source_ && audio_source_->is_live()) {
-            audio_.reset();
-            // 双轨保留有界音频队列，避免删掉 IDR 之后本来可发送的 AU。
-            if (!timeline_ || !video_source_) {
-                audio_source_->resume();
-            }
-        }
-        if (!timeline_) {
-            reset_clock_ = true;
-        }
+        video_.reset();
+        audio_.reset();
+        video_source_->resume();
+        waiting_for_idr_ = true;
+        // 音频保持有界队列，避免删掉新 IDR 之后本来可发送的音频。
         next_deadline_ = Clock::now();
     }
     return SubscribeResult::Started;
@@ -366,12 +337,8 @@ void MediaSession::finish(bool failed) {
         return;
     }
     ended_ = true;
-    if (video_source_) {
-        video_source_->stop();
-    }
-    if (audio_source_) {
-        audio_source_->stop();
-    }
+    video_source_->stop();
+    audio_source_->stop();
     next_deadline_.reset();
     video_.reset();
     audio_.reset();
@@ -389,92 +356,62 @@ void MediaSession::tick(Clock::time_point now) {
         return;
     }
     try {
-        const bool require_both_live_tracks = timeline_ && video_source_ && audio_source_;
-        if (require_both_live_tracks) {
-            video_source_->check_health();
-            audio_source_->check_health();
+        // 即使没有观众，也要在任一设备停止时回收两路资源。
+        video_source_->check_health();
+        audio_source_->check_health();
+        std::vector<std::shared_ptr<MediaSubscription>> subscribers;
+        auto it = subscribers_.begin();
+        while (it != subscribers_.end()) {
+            auto subscriber = it->lock();
+            if (!subscriber || subscriber->finished()) {
+                it = subscribers_.erase(it);
+            } else {
+                subscribers.push_back(std::move(subscriber));
+                ++it;
+            }
         }
-        // 单轮最多推进 32 个 AU，媒体落后时也要让出网络处理机会。
-        // AU 可以理解为一份完整的编码媒体单元：
-        // - H.264 通常是一帧访问单元；
-        // - AAC 通常是一帧音频访问单元。
-        // 设置 32 的目的，是防止媒体落后时，tick() 一直处理媒体而不返回，导致网络事件得不到处理
-        for (int budget = 0; budget < 32; ++budget) {
-            std::vector<std::shared_ptr<MediaSubscription>> subscribers;
-            auto it = subscribers_.begin();
-            while (it != subscribers_.end()) {
-                auto subscriber = it->lock();
-                if (!subscriber || subscriber->finished()) {
-                    it = subscribers_.erase(it);
-                } else {
-                    subscribers.push_back(std::move(subscriber));
-                    ++it;
-                }
-            }
-            if (subscribers.empty()) {
-                if (!timeline_) {
-                    reset_clock_ = true;
-                }
-                // 表示当前没有下一帧的发送期限。
-                next_deadline_.reset();
-                return;
-            }
-            started_ = true;
+        if (subscribers.empty()) {
+            next_deadline_.reset();
+            return;
+        }
 
-            // 每条轨道只预读一帧，选择媒体时间更早的帧。负载只封装一次。
-            if (!video_ && video_source_ && !video_source_->ended()) {
+        // 每轮限制处理量，避免积压的 AU 占住网络事件循环。
+        for (int budget = 0; budget < 32; ++budget) {
+            // 每条轨道预读一个 AU。同一份 RTP 负载只封装一次。
+            if (!video_) {
                 H264AccessUnit frame;
                 if (video_source_->read(frame)) {
                     video_ = video_packetizer_.packetize_access_unit(frame);
                 }
             }
-            if (!audio_ && audio_source_ && !audio_source_->ended()) {
+            if (!audio_) {
                 AacAccessUnit frame;
                 if (audio_source_->read(frame)) {
-                    audio_ = audio_packetizer_.packetize(frame, audio_source_->track().clock_rate);
+                    audio_ = audio_packetizer_.packetize(frame, description_.tracks[audio_track].clock_rate);
                 }
             }
-            if (require_both_live_tracks && (video_source_->ended() || audio_source_->ended())) {
+            if (video_source_->ended() || audio_source_->ended()) {
                 throw std::runtime_error(video_source_->ended() ? "video input ended" : "audio input ended");
             }
             if (!video_ && !audio_) {
-                if ((!video_source_ || video_source_->ended())
-                    && (!audio_source_ || audio_source_->ended())) {
-                    finish(false);
-                } else {
-                    // 实时队列为空不代表 EOF；避免忙轮询，也不阻塞网络事件处理。
-                    next_deadline_ = now + std::chrono::milliseconds(5);
-                }
+                next_deadline_ = now + input_retry;  // 暂时没帧，不阻塞或忙等。
                 return;
             }
-            bool send_video = false;
-            if (video_ && (!audio_ || !media_pts_less(audio_->pts, audio_->clock_rate,
-                                                     video_->pts, video_->clock_rate))) {
-                send_video = true;
-            }
+
+            const bool send_video = video_ && (!audio_ || !media_pts_less(
+                audio_->pts, audio_->clock_rate, video_->pts, video_->clock_rate));
             auto& pending = send_video ? video_ : audio_;
-            const RtpPayloadUnit& unit = *pending;
-            const std::size_t track_index = send_video ? video_track_ : audio_track_;
+            const auto& unit = *pending;
             const auto media_time = std::chrono::microseconds(rescale_media_pts(unit.pts, unit.clock_rate, 1000000));
-            if (!timeline_ && reset_clock_) {
-                clock_origin_ = now - media_time;
-                reset_clock_ = false;
-            }
-            const auto media_at = timeline_ ? timeline_->at(media_time) : clock_origin_ + media_time;
-            const auto send_at = timeline_ ? media_at + send_buffer_ : media_at;
-            next_deadline_ = send_at;
+            const auto media_at = timeline_.at(media_time);
+            const auto send_at = media_at + send_buffer_;
             if (now < send_at) {
-                if ((!video_ && video_source_ && !video_source_->ended())
-                    || (!audio_ && audio_source_ && !audio_source_->ended())) {
-                    // 一轨已有未来帧时，也要短期重查尚未就绪的另一轨。
-                    const auto retry = now + std::chrono::milliseconds(5);
-                    if (retry < *next_deadline_) {
-                        next_deadline_ = retry;
-                    }
-                }
+                // 一轨已有未来帧时，也要及时重查另一轨。
+                next_deadline_ = video_ && audio_ ? send_at : std::min(send_at, now + input_retry);
                 return;
             }
-            const bool late = timeline_ && now > send_at + max_live_lateness;
+
+            const bool late = now > send_at + max_live_lateness;
             if (send_video && late) {
                 waiting_for_idr_ = true;
             }
@@ -483,16 +420,18 @@ void MediaSession::tick(Clock::time_point now) {
                     waiting_for_idr_ = false;
                 }
                 for (const auto& subscriber : subscribers) {
-                    subscriber->deliver(track_index, unit, media_at);
+                    subscriber->deliver(send_video ? video_track : audio_track, unit, media_at);
+                }
+                // deliver() 可能关闭慢客户端的队列，全部退出时不再消费媒体。
+                if (std::all_of(subscribers.begin(), subscribers.end(), [](const auto& subscriber) {
+                        return subscriber->finished();
+                    })) {
+                    pending.reset();
+                    next_deadline_.reset();
+                    return;
                 }
             }
             pending.reset();
-            // 一条轨道 EOF 不关闭连接；两条轨道均发送完才统一结束。
-            if (!video_ && !audio_ && (!video_source_ || video_source_->ended())
-                && (!audio_source_ || audio_source_->ended())) {
-                finish(false);
-                return;
-            }
         }
         next_deadline_ = now;
     } catch (const std::exception& error) {
