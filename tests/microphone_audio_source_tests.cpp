@@ -5,6 +5,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <optional>
 
 namespace {
 using namespace std::chrono_literals;
@@ -33,14 +34,18 @@ struct State {
 
 class ControlledInput final : public rtsp::AudioFrameInput {
 public:
-    ControlledInput(std::shared_ptr<State> state, bool pcm = true)
-        : state_(std::move(state)), pcm_(pcm), input_(3000, 48000, 1) {}
+    ControlledInput(std::shared_ptr<State> state, bool pcm = true,
+                    std::optional<std::int64_t> first_arrival_us = std::nullopt)
+        : state_(std::move(state)), pcm_(pcm), first_arrival_us_(first_arrival_us), input_(3000, 48000, 1) {}
 
     rtsp::AudioInputResult read(rtsp::AudioFrame& frame, std::chrono::milliseconds timeout) override {
         owner_ = std::this_thread::get_id();
         std::unique_lock<std::mutex> lock(state_->mutex);
         if (pcm_ && !state_->stopped && !state_->failed) {
             if (input_.read(frame, 0ms) == rtsp::AudioInputResult::FrameReady) {
+                if (first_arrival_us_) {
+                    frame.arrival_steady_us = *first_arrival_us_ + *frame.source_pts * 30;
+                }
                 return rtsp::AudioInputResult::FrameReady;
             }
         }
@@ -67,6 +72,7 @@ public:
 private:
     std::shared_ptr<State> state_;
     const bool pcm_;
+    const std::optional<std::int64_t> first_arrival_us_;
     rtsp::app::SyntheticAudioInput input_;
     std::thread::id owner_;
 };
@@ -141,6 +147,34 @@ void lifecycle() {
     check(raised, "PCM starvation was not reported");
 }
 
+void test_capture_timeline() {
+    const Clock::time_point epoch{1s};
+    for (const int start_ms : {200, 80, -40}) {
+        auto state = std::make_shared<State>();
+        rtsp::MicrophoneAudioSourceConfig config;
+        config.timeline = std::make_shared<const rtsp::CaptureTimeline>(epoch);
+        // The first block has 333 samples at 48 kHz (6937 us truncated).
+        rtsp::MicrophoneAudioSource source(
+            std::make_unique<ControlledInput>(state, true, 1000000 + start_ms * 1000 + 6937), config);
+        state->finish();
+        const auto deadline = Clock::now() + 2s;
+        int packets = 0;
+        const auto start_pts = start_ms * 48;
+        while (!source.ended()) {
+            check(Clock::now() < deadline, "timeline audio did not reach EOF");
+            rtsp::AacAccessUnit unit;
+            if (source.read(unit)) {
+                check(unit.pts == start_pts - 1024 + packets * 1024,
+                      "AAC lost the configured capture offset, padding or sample continuity");
+                ++packets;
+            } else {
+                std::this_thread::yield();
+            }
+        }
+        check(packets == 4, "timeline audio lost tail packets");
+    }
+}
+
 void audio_only_session(std::uint32_t timestamp_origin) {
     rtsp::MicrophoneAudioSourceConfig config;
     config.queue.max_frames = 128;
@@ -200,6 +234,7 @@ void audio_only_session(std::uint32_t timestamp_origin) {
 int main() {
     try {
         lifecycle();
+        test_capture_timeline();
         audio_only_session(0);
         audio_only_session(0xfffffc00u);
         std::cout << "PASS: startup, waiting, EOF, error draining, stop and pure audio RTP session\n";

@@ -1,4 +1,5 @@
 #include "media/microphone_audio_source.h"
+#include "media/media_time.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -43,11 +44,13 @@ MicrophoneAudioSource::~MicrophoneAudioSource() {
     stop();
 }
 
-void MicrophoneAudioSource::publish(std::vector<AacAccessUnit> frames, const AacEncoder& encoder) {
+void MicrophoneAudioSource::publish(std::vector<AacAccessUnit> frames, const AacEncoder& encoder,
+                                    std::int64_t start_pts) {
     for (auto& frame : frames) {
         if (stopping_.load()) {
             return;
         }
+        frame.pts = add_media_pts(frame.pts, start_pts);
         if (!queue_.push(std::move(frame))) {
             return;
         }
@@ -65,6 +68,7 @@ void MicrophoneAudioSource::produce() noexcept {
     try {
         AacEncoder encoder;
         encoder.open(config_.encoder);
+        std::optional<std::int64_t> start_pts;
         auto last_data = std::chrono::steady_clock::now();
         while (!stopping_.load()) {
             AudioFrame frame;
@@ -79,11 +83,18 @@ void MicrophoneAudioSource::produce() noexcept {
                 continue;
             }
             if (result == AudioInputResult::Ended) {
-                publish(encoder.flush(), encoder);
+                publish(encoder.flush(), encoder, start_pts.value_or(0));
                 break;
             }
             last_data = std::chrono::steady_clock::now();
-            publish(encoder.encode(frame), encoder);
+            if (config_.timeline && !start_pts) {
+                // 用首块结束附近的到达时刻估算首个采样时刻；不逐块重打 PTS。
+                const auto block_us = rescale_media_pts(frame.nb_samples, frame.sample_rate, 1000000);
+                const auto first_us = add_media_pts(
+                    config_.timeline->relative_us(frame.arrival_steady_us), -block_us);
+                start_pts = rescale_media_pts(first_us, 1000000, encoder.track().clock_rate);
+            }
+            publish(encoder.encode(frame), encoder, start_pts.value_or(0));
         }
     } catch (...) {
         error = std::current_exception();

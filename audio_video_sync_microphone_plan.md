@@ -1,6 +1,6 @@
 # 音视频同步与实时麦克风采集实现方案
 
-> 日期：2026-11-18。本文保留整体设计与实施路线；阶段 1～3 已实现，最小有符号 PTS 改造提前在阶段 3 完成，阶段 4～6 仍为计划。阶段 3 的实际接口、命令和验证结果见 [独立音频编码实现说明](audio_encoding_implementation.md)。
+> 更新：2026-11-19。阶段 1～4 已实现，阶段 5～6 仍为计划。阶段 3 的接口和验证见 [独立音频编码实现说明](audio_encoding_implementation.md)，阶段 4 的接线和测试见 [共同时间线实现](#阶段-4-共同时间线实现)。
 > 目标环境：Windows；输入为摄像头与电脑麦克风；输出为 H.264 + AAC-LC 的 RTSP/TCP 双轨道。
 
 ## 1. 目标与范围
@@ -33,7 +33,7 @@
 重要事实：
 
 1. 阶段 1 已将 `MediaSession` 改为持有 `unique_ptr<AudioSource>`，文件读取由 `FileAudioSource` 包装；阶段 3 已接入 `MicrophoneAudioSource`。
-2. `CameraCapture` 的 `relative_pts_us` 按本设备首帧归零，`H264Encoder` 也会按自己的 `source_origin` 归零；共同时间线模式必须避免丢失设备启动偏移。
+2. `CameraCapture` 的 `relative_pts_us` 仍按本设备首帧归零；共同模式使用独立的 `capture_pts_us`，`H264Encoder` 不再减去本轨起点。
 3. 阶段 3 已将媒体 AU、通用负载和订阅起点改为有符号 PTS，保留 AAC 起始填充产生的负时间；RTP 仍使用 uint32_t。
 4. 已有基本 RTCP SR，无需重新实现 RTCP 协议；需要修改并验证时间锚点的语义。
 5. 自带客户端目前主要接收并保存 H.264，不具备完整音视频播放验收能力。
@@ -257,7 +257,7 @@ audio_rtp = audio_rtp_base + rescale(t - subscription_start, 1/Fs)
 
 两条轨道 RTP 数值不需要相同。生成 SR 时，在同一个报告时刻计算 NTP 与该轨对应的 RTP 时钟值；若两条 SR 实际发送时刻不同，也各自保持一致映射，无需强制相同 NTP 数值。RTP base 可以不同，但必须纳入 SR 和订阅时间换算。
 
-当前 `MediaSubscription::deliver()` 把首次 RTP 时间锚定到传入的 `presentation_time`。实时模式增加 send_buffer 后，需要把“媒体参考时刻”和“计划发送时刻”分开：前者用于本方案的采集时间映射，后者仅用于调度。只改变调度时间、却继续复用旧锚点语义，会把缓冲时长混入映射。
+`MediaSubscription::deliver()` 把首次 RTP 时间锚定到 `media_at`。共同实时模式中 `send_buffer` 只影响计划发送时刻，不进入 RTP/RTCP 的采集时间映射；文件模式的媒体时刻仍使用虚拟播放起点。
 
 SR 的包数/字节数沿用实际发送完成后的统计，不能使用编码数或入队数。为首个可用报告安排及时发送，后续沿用可配置周期，不依靠大幅提高 SR 频率修复错误 PTS。
 
@@ -314,11 +314,16 @@ cmake --build build-av --config Debug
 | 1：抽象音频源 | 新增 AudioSource/FileAudioSource；保留构造兼容 | 现有文件双轨、纯音频和摄像头测试通过 |
 | 2：独立采集 | 新增麦克风枚举、PCM 采集、probe 和可停止读取 | 有设备时连续采集正常；无设备时明确报错；停止能释放设备 |
 | 3：独立音频编码（已实现） | 重采样、FIFO、AAC、配置生成、音频源、最小有符号 PTS；纯音频测试会话 | 已用外部 FFmpeg 验证解码、连续采样/PTS、padding 和脉冲位置；真实设备验收边界见实现说明 |
-| 4：共同时间线 | 注入 CaptureTimeline；改造视频模式；复查有符号时间与实时/文件调度 | 人工制造 120 ms 启动差，RTP/RTCP 仍保留该差值 |
+| 4：共同时间线（已实现） | 注入 CaptureTimeline；改造视频模式；分开采集时刻与发送期限 | 合成轨道验证 RTP/RTCP 保留 120 ms 启动差，并可反推原始采集时刻 |
 | 5：实时行为 | 接通双轨服务器入口；处理晚加入、积压、无人观看和设备失败 | 多客户端互不拖累，恢复不补发过期历史数据 |
 | 6：漂移与验收 | 统计、时钟映射验证、受限重采样补偿和长时间测试 | 模拟漂移可被控制，真实设备测试无持续偏差增长趋势 |
 
-每阶段完成后再进入下一阶段。阶段 4 之前不把“能同时收到音频和视频”视为已经实现同步。
+### 阶段 4 共同时间线实现
+
+- 在启动设备前创建一个 `std::shared_ptr<const CaptureTimeline>`；将同一实例填到 `CameraVideoSourceConfig::timeline`、`MicrophoneAudioSourceConfig::timeline`，两路源就绪后传给 `MediaSession(video, audio, timeline)`。不注入则保留旧路径；目前只开放代码级注入，阶段 5 再接双轨命令行。
+- 视频用首帧的单调到达时刻估计起始偏移，之后保留设备 PTS 增量。若首帧没有设备 PTS，则本轮用到达时刻；若从设备 PTS 模式中途丢失 PTS 或时间基改变，则报错。音频用首块到达时刻减块时长估计首采样，只整体平移 AAC 包 PTS，包含 flush 包和起始填充。到达时间只是估计，未校准实际设备延迟。
+- 会话默认用 `T0 + PTS + 150 ms` 决定发送期限，用 `T0 + PTS` 建立 RTCP 锚点。订阅恢复不改变 `T0`，晚加入仍从可解码的 IDR 起步。
+- `camera_video_source_tests` 和 `microphone_audio_source_tests` 用生成帧跑真实编码器，检查 80/200 ms 起点及负 AAC PTS。`media_session_tests` 用整数 tick 控制推进，验证发送期限、RTP 回绕、从不同报告时刻的 SR 反推出 80/200 ms，以及重新订阅不重置 `T0`。
 
 ## 12. 测试与验收
 
@@ -382,7 +387,7 @@ ctest --test-dir build-av -C Debug --output-on-failure
 
 固定偏移、时间戳错误、设备漂移、编码排队、网络排队分别定位。发现音画不同步时，先证明共同时间与 SR 映射正确，再调整缓冲或补偿参数，避免用延迟参数掩盖根因。
 
-本文只规定设计和验证方法；尚未采集当前电脑的麦克风，也未证明具体设备与播放器组合已经满足上述目标。
+阶段 4 的验收使用合成输入，未验证真实双设备的采集延迟、漂移或播放器同步效果。
 
 ## 14. 参考资料
 

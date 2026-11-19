@@ -199,7 +199,7 @@ bool MediaSubscription::failed() const {
 }
 
 void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& unit,
-                                 MediaClock::Clock::time_point presentation_time) {
+                                 MediaClock::Clock::time_point media_at) {
     if (!active_) {
         return;
     }
@@ -226,7 +226,7 @@ void MediaSubscription::deliver(std::size_t track_index, const RtpPayloadUnit& u
             if (track.sender->send_payloads(unit, timestamp, *queue_)) {
                 if (!track.queued_rtp) {
                     track.anchor_timestamp = timestamp;
-                    track.anchor_time = presentation_time;
+                    track.anchor_time = media_at;
                     track.queued_rtp = true;
                 }
                 return;
@@ -266,8 +266,15 @@ MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source, const std:
                    audio_path.empty() ? nullptr : std::make_unique<FileAudioSource>(audio_path)) {}
 
 MediaSession::MediaSession(std::unique_ptr<VideoSource> video_source,
-                           std::unique_ptr<AudioSource> audio_source)
-    : video_source_(std::move(video_source)), audio_source_(std::move(audio_source)) {
+                           std::unique_ptr<AudioSource> audio_source,
+                           std::shared_ptr<const CaptureTimeline> timeline,
+                           std::chrono::milliseconds send_buffer)
+    : video_source_(std::move(video_source)), audio_source_(std::move(audio_source)),
+      timeline_(std::move(timeline)), send_buffer_(send_buffer) {
+    if (timeline_ && (send_buffer_.count() < 0 || (video_source_ && !video_source_->is_live()) ||
+                      (audio_source_ && !audio_source_->is_live()))) {
+        throw std::invalid_argument("capture timeline requires live sources and a nonnegative send buffer");
+    }
     description_.tracks.clear();
     if (video_source_) {
         video_track_ = description_.tracks.size();
@@ -323,7 +330,9 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
             audio_.reset();
             audio_source_->resume();
         }
-        reset_clock_ = true;
+        if (!timeline_) {
+            reset_clock_ = true;
+        }
         next_deadline_ = Clock::now();
     }
     return SubscribeResult::Started;
@@ -391,8 +400,9 @@ void MediaSession::tick(Clock::time_point now) {
                 }
             }
             if (subscribers.empty()) {
-                // 表示以后有新订阅加入时，需要重新建立媒体时钟起点
-                reset_clock_ = true;
+                if (!timeline_) {
+                    reset_clock_ = true;
+                }
                 // 表示当前没有下一帧的发送期限。
                 next_deadline_.reset();
                 return;
@@ -430,13 +440,14 @@ void MediaSession::tick(Clock::time_point now) {
             const RtpPayloadUnit& unit = *(send_video ? video_ : audio_);
             const std::size_t track_index = send_video ? video_track_ : audio_track_;
             const auto media_time = std::chrono::microseconds(rescale_media_pts(unit.pts, unit.clock_rate, 1000000));
-            // clock_origin 表示：媒体时间0对应的时刻
-            if (reset_clock_) {
+            if (!timeline_ && reset_clock_) {
                 clock_origin_ = now - media_time;
                 reset_clock_ = false;
             }
-            next_deadline_ = clock_origin_ + media_time;
-            if (now < *next_deadline_) {
+            const auto media_at = timeline_ ? timeline_->at(media_time) : clock_origin_ + media_time;
+            const auto send_at = timeline_ ? media_at + send_buffer_ : media_at;
+            next_deadline_ = send_at;
+            if (now < send_at) {
                 if ((!video_ && video_source_ && !video_source_->ended())
                     || (!audio_ && audio_source_ && !audio_source_->ended())) {
                     // 一轨已有未来帧时，也要短期重查尚未就绪的另一轨。
@@ -448,7 +459,7 @@ void MediaSession::tick(Clock::time_point now) {
                 return;
             }
             for (const auto& subscriber : subscribers) {
-                subscriber->deliver(track_index, unit, *next_deadline_);
+                subscriber->deliver(track_index, unit, media_at);
             }
             if (send_video) {
                 video_.reset();

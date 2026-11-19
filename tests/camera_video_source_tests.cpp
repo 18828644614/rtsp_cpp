@@ -62,7 +62,8 @@ rtsp::CameraVideoSourceConfig config() {
 }
 class GeneratedInput final : public rtsp::CameraFrameInput {
 public:
-    explicit GeneratedInput(std::shared_ptr<InputState> state) : state_(std::move(state)) {}
+    explicit GeneratedInput(std::shared_ptr<InputState> state, std::int64_t first_arrival_us = 0)
+        : state_(std::move(state)), first_arrival_us_(first_arrival_us) {}
     rtsp::CameraInputResult read(rtsp::CameraFrame& frame, std::chrono::milliseconds timeout) override {
         std::unique_lock<std::mutex> lock(state_->mutex);
         state_->reader = std::this_thread::get_id();
@@ -81,6 +82,7 @@ public:
         --state_->credits;
         lock.unlock();
         frame = rtsp::app::synthetic_camera_frame(64, 48, "yuyv422", 30, 1, index_++);
+        frame.arrival_steady_us = first_arrival_us_ + *frame.source_pts * 50000;
         return rtsp::CameraInputResult::FrameReady;
     }
     void request_stop() noexcept override {
@@ -96,6 +98,7 @@ public:
     }
 private:
     std::shared_ptr<InputState> state_;
+    const std::int64_t first_arrival_us_;
     std::int64_t index_ = 0;
 };
 std::unique_ptr<rtsp::CameraVideoSource> source(const std::shared_ptr<InputState>& state,
@@ -136,6 +139,28 @@ void test_source_wait_drain_stop() {
     check(Clock::now() - start < 1s, "destruction did not interrupt blocked input");
     check_released(blocked);
 }
+void test_capture_timeline() {
+    const Clock::time_point epoch{1s};
+    auto cfg = config();
+    cfg.timeline = std::make_shared<const rtsp::CaptureTimeline>(epoch);
+    for (const int start_ms : {80, 200}) {
+        auto state = std::make_shared<InputState>();
+        rtsp::CameraVideoSource camera(
+            std::make_unique<GeneratedInput>(state, 1000000 + start_ms * 1000), cfg);
+        const auto pts = start_ms * 90;
+        rtsp::H264AccessUnit frame;
+        check(camera.read(frame) && frame.is_keyframe && frame.pts == pts,
+              "H264 encoder erased the capture offset");
+        state->update(2, true);
+        await([&] {
+            return camera.queue_stats().closed;
+        });
+        check(camera.read(frame) && frame.pts == pts + 3000 && camera.read(frame) && frame.pts == pts + 6000,
+              "video used arrival jitter instead of device PTS increments");
+        check(!camera.read(frame) && camera.ended(), "timeline source did not drain");
+    }
+}
+
 void test_startup_and_runtime_failures() {
     for (int mode = 0; mode < 4; ++mode) {
         const auto state = std::make_shared<InputState>();
@@ -382,6 +407,7 @@ void test_capture_adapter_without_device() {
 int main() {
     try {
         test_source_wait_drain_stop();
+        test_capture_timeline();
         test_startup_and_runtime_failures();
         test_overflow_and_resume();
         test_media_session(false);

@@ -1,10 +1,53 @@
 #include "media/camera_video_source.h"
+#include "media/media_time.h"
+
+extern "C" {
+#include <libavutil/mathematics.h>
+}
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace rtsp {
+namespace {
+
+// 只用首帧到达时刻估计偏移，有设备 PTS 时不把后续到达抖动写进时间线。
+class CameraTimeMapper {
+public:
+    std::int64_t map(const CameraFrame& frame, const CaptureTimeline& timeline) {
+        if (!start_us_) {
+            start_us_ = timeline.relative_us(frame.arrival_steady_us);
+            source_origin_ = frame.source_pts;
+            time_base_ = {frame.time_base_num, frame.time_base_den};
+        }
+        if (!source_origin_) {
+            return timeline.relative_us(frame.arrival_steady_us);
+        }
+        if (!frame.source_pts || time_base_.num <= 0 || time_base_.den <= 0 ||
+            time_base_.num != frame.time_base_num || time_base_.den != frame.time_base_den) {
+            throw std::runtime_error("camera device timestamp missing or time base changed");
+        }
+        const auto pts = *frame.source_pts;
+        const auto origin = *source_origin_;
+        if (pts < origin || (origin < 0 && pts > std::numeric_limits<std::int64_t>::max() + origin)) {
+            throw std::runtime_error("camera device timestamp moved backwards or overflowed");
+        }
+        const auto elapsed = av_rescale_q(pts - origin, time_base_, {1, 1000000});
+        if (elapsed < 0) {
+            throw std::overflow_error("camera device timestamp out of range");
+        }
+        return add_media_pts(*start_us_, elapsed);
+    }
+
+private:
+    std::optional<std::int64_t> start_us_;
+    std::optional<std::int64_t> source_origin_;
+    AVRational time_base_{};
+};
+
+}  // namespace
 
 // CameraVideoSource
 // ├── input_：图像输入
@@ -80,7 +123,10 @@ void CameraVideoSource::produce() noexcept {
     std::exception_ptr error;
     try {
         H264Encoder encoder;
-        encoder.open(config_.encoder);
+        auto encoder_config = config_.encoder;
+        encoder_config.use_capture_timeline = static_cast<bool>(config_.timeline);
+        encoder.open(encoder_config);
+        CameraTimeMapper mapper;
         while (!stopping_.load()) {
             // 准备一个原始图像容器，向输入对象请求下一张图像，并取得读取状态
             CameraFrame frame;
@@ -95,6 +141,9 @@ void CameraVideoSource::produce() noexcept {
             if (result == CameraInputResult::Ended) {
                 publish(encoder.flush(), encoder);
                 break;
+            }
+            if (config_.timeline) {
+                frame.capture_pts_us = mapper.map(frame, *config_.timeline);
             }
             publish(encoder.encode(frame), encoder);
         }

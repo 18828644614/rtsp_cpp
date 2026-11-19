@@ -27,6 +27,8 @@ struct CameraFrame {
     std::int64_t source_duration = 0;
     std::optional<std::int64_t> relative_pts_us;
     std::int64_t arrival_steady_us = 0;
+    // 由实时源设置，与设备首帧归零的 relative_pts_us 不同。
+    std::optional<std::int64_t> capture_pts_us;
 };
 
 }

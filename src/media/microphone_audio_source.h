@@ -3,6 +3,7 @@
 #include "media/aac_encoder.h"
 #include "media/audio_frame_queue.h"
 #include "media/audio_source.h"
+#include "media/capture_timeline.h"
 
 #include <atomic>
 #include <chrono>
@@ -31,6 +32,7 @@ struct MicrophoneAudioSourceConfig {
     std::chrono::milliseconds startup_timeout{5000};
     std::chrono::milliseconds read_timeout{100};
     std::chrono::milliseconds no_data_timeout{5000};
+    std::shared_ptr<const CaptureTimeline> timeline;
 };
 
 class MicrophoneAudioSource final : public AudioSource {
@@ -52,7 +54,7 @@ public:
 
 private:
     void produce() noexcept;
-    void publish(std::vector<AacAccessUnit> frames, const AacEncoder& encoder);
+    void publish(std::vector<AacAccessUnit> frames, const AacEncoder& encoder, std::int64_t start_pts);
     std::unique_ptr<AudioFrameInput> input_;
     const MicrophoneAudioSourceConfig config_;
     AudioFrameQueue queue_;

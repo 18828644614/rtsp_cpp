@@ -6,6 +6,14 @@
 
 namespace rtsp {
 
+inline std::int64_t add_media_pts(std::int64_t pts, std::int64_t offset) {
+    if ((offset > 0 && pts > std::numeric_limits<std::int64_t>::max() - offset) ||
+        (offset < 0 && pts < std::numeric_limits<std::int64_t>::min() - offset)) {
+        throw std::overflow_error("media timestamp out of range");
+    }
+    return pts + offset;
+}
+
 inline std::int64_t rescale_media_pts(std::int64_t pts, int from_rate, int to_rate) {
     if (from_rate <= 0 || to_rate <= 0) {
         throw std::invalid_argument("invalid media clock rate");
@@ -18,11 +26,7 @@ inline std::int64_t rescale_media_pts(std::int64_t pts, int from_rate, int to_ra
     }
     const auto whole = seconds * to_rate;
     const auto fraction = (pts % from_rate) * to_rate / from_rate;
-    if ((fraction > 0 && whole > maximum - fraction) ||
-        (fraction < 0 && whole < minimum - fraction)) {
-        throw std::overflow_error("media timestamp out of range");
-    }
-    return whole + fraction;
+    return add_media_pts(whole, fraction);
 }
 
 inline bool media_pts_less(std::int64_t first, int first_rate,

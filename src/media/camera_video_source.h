@@ -1,6 +1,7 @@
 #pragma once
 
 #include "media/camera_frame.h"
+#include "media/capture_timeline.h"
 #include "media/h264_encoder.h"
 #include "media/video_frame_queue.h"
 #include "media/video_source.h"
@@ -35,6 +36,7 @@ struct CameraVideoSourceConfig {
     VideoFrameQueueLimits queue;
     std::chrono::milliseconds startup_timeout{5000};
     std::chrono::milliseconds read_timeout{100};
+    std::shared_ptr<const CaptureTimeline> timeline;
 };
 
 class CameraVideoSource final : public VideoSource {

@@ -6,6 +6,7 @@
 #include "rtsp/rtsp_stream_parser.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <iostream>
@@ -290,7 +291,7 @@ public:
             return false;
         }
         ready = false;
-        frame = {{std::string("\x65\x30", 2)}, true, 0, 3000};
+        frame = {{std::string("\x65\x30", 2)}, true, pts, 3000};
         return true;
     }
     bool ended() const override {
@@ -312,6 +313,7 @@ public:
     bool eof = false;
     bool fail = false;
     bool stopped = false;
+    std::int64_t pts = 0;
     int reads = 0;
     int resumes = 0;
 private:
@@ -508,6 +510,94 @@ private:
     rtsp::MediaTrack track_;
 };
 
+void test_capture_timeline() {
+    using namespace std::chrono_literals;
+    const auto epoch = Clock::now();
+    const auto timeline = std::make_shared<const rtsp::CaptureTimeline>(epoch);
+    auto video = std::make_unique<WaitingSource>();
+    auto audio = std::make_unique<WaitingAudioSource>();
+    auto* video_input = video.get();
+    video->ready = audio->ready = true;
+    video->pts = 7200;  // 80 ms at 90 kHz
+    audio->pts = 9600;  // 200 ms at 48 kHz
+    rtsp::MediaSession media(std::move(video), std::move(audio), timeline);
+    auto queue = std::make_shared<rtsp::net::OutboundQueue>();
+    auto subscription = std::make_shared<rtsp::MediaSubscription>(queue);
+    const auto& tracks = media.description().tracks;
+    constexpr std::uint32_t video_base = 0xffffff00, audio_base = 0xfffffff0;
+    subscription->add_track(0, tracks[0], {0, 1}, 100, 1, video_base);
+    subscription->add_track(1, tracks[1], {2, 3}, 200, 2, audio_base);
+    check(media.subscribe(subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "capture timeline subscription failed");
+    rtsp::net::OutboundMessage message;
+    check(queue->try_pop(message) && message.kind == rtsp::net::OutboundKind::RtspResponse,
+          "missing PLAY response");
+
+    const auto receive_rtp = [&](unsigned int channel) {
+        check(queue->try_pop(message) && message.kind == rtsp::net::OutboundKind::Rtp,
+              "missing timeline RTP");
+        rtsp::RtspStreamParser parser;
+        parser.append(message.wire.data(), message.wire.size());
+        rtsp::RtspStreamItem item;
+        check(parser.next(item) && item.is_interleaved && item.channel == channel, "wrong RTP channel");
+        subscription->on_sent(message);
+        return rtsp::parse_rtp_packet(item.payload).timestamp;
+    };
+    media.tick(epoch + 229ms);
+    check(!queue->try_pop(message) && media.next_deadline() == epoch + 230ms,
+          "video did not wait until T0 + PTS + send buffer");
+    media.tick(epoch + 230ms);
+    const auto video_rtp = receive_rtp(0);
+    media.tick(epoch + 349ms);
+    check(!queue->try_pop(message) && media.next_deadline() == epoch + 350ms,
+          "audio did not wait until T0 + PTS + send buffer");
+    media.tick(epoch + 350ms);
+    const auto audio_rtp = receive_rtp(2);
+    check(video_rtp == video_base && audio_rtp == std::uint32_t(audio_base + 5760u),
+          "RTP lost the common subscription offset or did not wrap");
+
+    const auto report_at = epoch + 400ms;
+    subscription->tick_rtcp(report_at, 1s);
+    const auto sample_time = [&](Clock::time_point now, std::uint32_t ssrc,
+                                 std::uint32_t timestamp, int clock_rate) {
+        check(queue->try_pop(message) && message.kind == rtsp::net::OutboundKind::Rtcp,
+              "missing sender report");
+        const auto wire = subscription->prepare_rtcp(message, media.clock(), now);
+        rtsp::RtspStreamParser parser;
+        parser.append(wire.data(), wire.size());
+        rtsp::RtspStreamItem item;
+        check(parser.next(item) && item.is_interleaved, "invalid interleaved RTCP");
+        const auto packets = rtsp::parse_rtcp_compound(item.payload);
+        check(!packets.empty() && packets.front().type == 200, "expected RTCP SR");
+        const auto& sr = packets.front();
+        check(sr.ssrc == ssrc && sr.ntp == media.clock().ntp_at(now) && sr.packet_count == 1,
+              "wrong SR stream, report time or count");
+        const auto elapsed = static_cast<std::uint32_t>(sr.rtp_timestamp - timestamp);
+        const auto ntp_since_epoch = static_cast<std::int64_t>(sr.ntp - media.clock().ntp_at(epoch));
+        return ntp_since_epoch / 4294967296.0 - static_cast<double>(elapsed) / clock_rate;
+    };
+    const auto video_seconds = sample_time(report_at, 1, video_rtp, 90000);
+    const auto audio_seconds = sample_time(report_at + 37ms, 2, audio_rtp, 48000);
+    const double tolerance = 1.0 / 48000;
+    check(std::abs(video_seconds - 0.080) < tolerance && std::abs(audio_seconds - 0.200) < tolerance &&
+          std::abs(audio_seconds - video_seconds - 0.120) < tolerance,
+          "SR did not preserve absolute capture time and the 120 ms offset");
+
+    subscription->cancel();
+    media.tick(epoch + 450ms);
+    video_input->ready = true;
+    video_input->pts = 45000;  // T0 + 500 ms, send at T0 + 650 ms
+    Peer resumed(tracks[0]);
+    check(media.subscribe(resumed.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+          "capture timeline resubscribe failed");
+    media.tick(epoch + 640ms);
+    check(resumed.queue->try_pop(message) && message.kind == rtsp::net::OutboundKind::RtspResponse &&
+          !resumed.queue->try_pop(message), "capture epoch was reset on resubscribe");
+    media.tick(epoch + 650ms);
+    check(resumed.queue->try_pop(message) && message.kind == rtsp::net::OutboundKind::Rtp,
+          "resumed peer did not receive video at the original deadline");
+}
+
 void test_audio_waiting_and_end() {
     for (bool failure : {false, true}) {
         auto input = std::make_unique<WaitingAudioSource>();
@@ -692,6 +782,7 @@ int main() {
         test_live_wait_with_future_audio();
         test_injected_audio_file(false);
         test_injected_audio_file(true);
+        test_capture_timeline();
         test_audio_waiting_and_end();
         test_audio_resume_and_stop();
         test_audio_wait_with_future_video();

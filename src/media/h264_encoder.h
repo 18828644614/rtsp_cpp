@@ -19,12 +19,14 @@ struct H264EncoderConfig {
     // 关键帧间隔，默认 30 帧
     int gop = 30;
     std::string pixel_format = "yuyv422";
+    bool use_capture_timeline = false;
 };
 
 enum class EncoderTimestampMode {
     Unset,
     Source,
-    FrameRate
+    FrameRate,
+    CaptureTimeline
 };
 
 // 单个所有者线程顺序调用；输入帧只读，输出拥有独立的 NALU 字节。

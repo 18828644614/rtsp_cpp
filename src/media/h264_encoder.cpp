@@ -184,7 +184,12 @@ struct H264Encoder::Impl {
         std::int64_t pts = nominal_pts;
         const bool use_source = mode == EncoderTimestampMode::Source ||
             (mode == EncoderTimestampMode::Unset && frame.source_pts.has_value());
-        if (use_source && frame.source_pts) {
+        if (mode == EncoderTimestampMode::CaptureTimeline) {
+            if (!frame.capture_pts_us) {
+                throw std::invalid_argument("missing camera capture PTS");
+            }
+            pts = av_rescale_q(*frame.capture_pts_us, {1, 1000000}, media_time_base);
+        } else if (use_source && frame.source_pts) {
             if (source_origin && (frame.time_base_num != source_time_base.num ||
                 frame.time_base_den != source_time_base.den)) {
                 throw std::invalid_argument("camera time base changed; reopen encoder");
@@ -202,7 +207,8 @@ struct H264Encoder::Impl {
             }
             pts = *last_pts + step;
         }
-        if (pts < 0 || (last_pts && pts <= *last_pts)) {
+        if (pts == AV_NOPTS_VALUE || (mode != EncoderTimestampMode::CaptureTimeline && pts < 0) ||
+            (last_pts && pts <= *last_pts)) {
             throw std::invalid_argument("encoder PTS must strictly increase after 90 kHz conversion");
         }
         const auto duration = frame.source_duration > 0
@@ -290,6 +296,9 @@ void H264Encoder::open(const H264EncoderConfig& config) {
 
     // 创建本次编码任务的内部状态
     auto state = std::make_unique<Impl>();
+    if (config.use_capture_timeline) {
+        state->mode = EncoderTimestampMode::CaptureTimeline;
+    }
     state->config = config;
     // 把字符串转换为 FFmpeg 枚举
     // "yuyv422" → AV_PIX_FMT_YUYV422
@@ -439,7 +448,8 @@ std::vector<H264AccessUnit> H264Encoder::encode(const CameraFrame& frame) {
                 impl_->source_time_base = {frame.time_base_num, frame.time_base_den};
             }
         }
-        if (impl_->mode == EncoderTimestampMode::FrameRate || !frame.source_pts) {
+        if (impl_->mode == EncoderTimestampMode::FrameRate ||
+            (impl_->mode == EncoderTimestampMode::Source && !frame.source_pts)) {
             ++impl_->fallbacks;
         }
         impl_->last_pts = timing.pts;

@@ -14,7 +14,9 @@ USB 摄像头实时采集并通过 RTSP 输出的改造框架见 [USB 摄像头 
 
 麦克风阶段 2 已增加可选的 `MicrophoneCapture`、PCM 帧和独立 `microphone_probe`，支持设备枚举、实际采样格式和原始时间信息、可停止读取与重复释放。`ENABLE_MICROPHONE_CAPTURE=ON` 可独立构建；本机已验证 Realtek 麦克风连续 60 秒采集及跨线程停止重开。构建、参数、线程约定和验收记录见 [麦克风独立采集阶段 2 实现说明](microphone_capture_implementation.md)。
 
-音频阶段 3 已实现 `AudioResampler`、`AacEncoder`、有界音频队列和 `MicrophoneAudioSource`，用一个工作线程完成采集、重采样、FIFO 和 AAC-LC 编码，支持纯音频 RTSP/TCP。`ENABLE_AAC_ENCODING=ON` 可独立启用；真实设备另需 `ENABLE_MICROPHONE_CAPTURE=ON`。`aac_encode_probe --synthetic` 可验证编码、负 PTS、头尾 padding 和外部解码；服务器支持 `--synthetic-audio`、`--microphone INDEX`、`--microphone-device NAME`。框架、命令及验收见 [独立音频编码阶段 3 实现说明](audio_encoding_implementation.md)。共同音视频时间线仍属于后续阶段。
+音频阶段 3 已实现 `AudioResampler`、`AacEncoder`、有界音频队列和 `MicrophoneAudioSource`，用一个工作线程完成采集、重采样、FIFO 和 AAC-LC 编码，支持纯音频 RTSP/TCP。`ENABLE_AAC_ENCODING=ON` 可独立启用；真实设备另需 `ENABLE_MICROPHONE_CAPTURE=ON`。`aac_encode_probe --synthetic` 可验证编码、负 PTS、头尾 padding 和外部解码；服务器支持 `--synthetic-audio`、`--microphone INDEX`、`--microphone-device NAME`。框架、命令及验收见 [独立音频编码阶段 3 实现说明](audio_encoding_implementation.md)。
+
+音视频同步阶段 4 已支持在采集源和 `MediaSession` 中注入共同时间线。合成测试验证 RTP/RTCP 保留 120 ms 启动差，发送缓冲不改变采集时间映射。双轨命令行和实机验收仍未接通，见 [共同时间线实现](audio_video_sync_microphone_plan.md#阶段-4-共同时间线实现)。
 
 摄像头阶段 2 已增加可选的 `CameraCapture` 和独立 `camera_probe`，支持设备枚举、原始帧采集、时间戳日志、连续采集和停止释放。已验证 `Integrated Camera` 的 1280x720、30 fps、`yuyv422` 模式；物理拔出仍待外接 USB 摄像头验收。构建、运行命令和模块阅读顺序见 [摄像头采集阶段 2 实现说明](camera_capture_implementation.md)。
 

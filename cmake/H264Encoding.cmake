@@ -11,7 +11,7 @@ else()
 endif()
 
 add_library(camera_video_source STATIC src/media/camera_video_source.cpp)
-target_link_libraries(camera_video_source PUBLIC rtsp_core h264_encoder)
+target_link_libraries(camera_video_source PUBLIC rtsp_core h264_encoder PRIVATE FFmpeg::avutil)
 if(ENABLE_CAMERA_CAPTURE)
     target_sources(camera_video_source PRIVATE src/media/camera_capture_input.cpp)
     target_link_libraries(camera_video_source PUBLIC camera_capture)

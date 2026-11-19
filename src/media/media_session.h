@@ -2,6 +2,7 @@
 
 #include "media/audio_source.h"
 #include "media/aac_packetizer.h"
+#include "media/capture_timeline.h"
 #include "media/video_source.h"
 #include "media/h264_packetizer.h"
 #include "rtp/rtp_sender.h"
@@ -66,7 +67,7 @@ private:
 
     bool start(const std::string& play_response);
     void deliver(std::size_t track_index, const RtpPayloadUnit& unit,
-                 MediaClock::Clock::time_point presentation_time);
+                 MediaClock::Clock::time_point media_at);
     void finish(bool failed);
     bool queue_report(TrackSender& track, bool final);
     std::shared_ptr<net::OutboundQueue> queue_;
@@ -95,9 +96,12 @@ public:
     // 接管视频源；nullptr 表示关闭视频轨道。源须在构造时准备好轨道配置。
     explicit MediaSession(std::unique_ptr<VideoSource> video_source,
                           const std::string& audio_path = "");
-    // 接管音视频源；nullptr 关闭对应轨道，至少提供一个源。
+    // 注入实时源使用的同一时间线时，PTS 相对固定 T0，send_buffer 只控制发送期限。
+    // 不注入则保留原来的播放时钟行为。nullptr 可关闭一条轨道。
     MediaSession(std::unique_ptr<VideoSource> video_source,
-                 std::unique_ptr<AudioSource> audio_source);
+                 std::unique_ptr<AudioSource> audio_source,
+                 std::shared_ptr<const CaptureTimeline> timeline = nullptr,
+                 std::chrono::milliseconds send_buffer = std::chrono::milliseconds{150});
     ~MediaSession();
 
     const SessionDescription& description() const;
@@ -120,6 +124,8 @@ private:
     MediaClock clock_;
     std::unique_ptr<VideoSource> video_source_;
     std::unique_ptr<AudioSource> audio_source_;
+    const std::shared_ptr<const CaptureTimeline> timeline_;
+    const std::chrono::milliseconds send_buffer_;
     H264Packetizer video_packetizer_;
     AacPacketizer audio_packetizer_;
     std::size_t video_track_ = 0;
