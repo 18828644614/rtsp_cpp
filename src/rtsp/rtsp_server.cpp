@@ -30,8 +30,17 @@ RtspServer::~RtspServer() {
 RtspServer::RtspServer(std::string address, std::uint16_t port,
                        std::unique_ptr<VideoSource> video_source,
                        std::unique_ptr<AudioSource> audio_source, RuntimeOptions options)
+    : RtspServer(std::move(address), port, std::move(video_source), std::move(audio_source),
+                 nullptr, std::chrono::milliseconds{150}, options) {}
+
+RtspServer::RtspServer(std::string address, std::uint16_t port,
+                       std::unique_ptr<VideoSource> video_source,
+                       std::unique_ptr<AudioSource> audio_source,
+                       std::shared_ptr<const CaptureTimeline> timeline,
+                       std::chrono::milliseconds send_buffer, RuntimeOptions options)
     : address_(std::move(address)), port_(port), options_(options),
-      media_session_(std::make_shared<MediaSession>(std::move(video_source), std::move(audio_source))) {}
+      media_session_(std::make_shared<MediaSession>(std::move(video_source), std::move(audio_source),
+                                                    std::move(timeline), send_buffer)) {}
 
 void RtspServer::run(const std::atomic<bool>* stop_requested) {
     // 把 running_ 设置为 true

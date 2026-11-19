@@ -23,7 +23,6 @@ target_compile_definitions(rtsp_server PRIVATE RTSP_HAS_AUDIO_SOURCE)
 if(ENABLE_MICROPHONE_CAPTURE)
     target_compile_definitions(rtsp_server PRIVATE RTSP_HAS_MICROPHONE_CAPTURE)
 endif()
-copy_ffmpeg_runtime(rtsp_server)
 
 add_executable(aac_encode_probe src/app/aac_encode_probe_main.cpp)
 target_link_libraries(aac_encode_probe PRIVATE microphone_audio_source FFmpeg::avutil)

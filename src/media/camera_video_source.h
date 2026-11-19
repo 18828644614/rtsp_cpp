@@ -37,6 +37,7 @@ struct CameraVideoSourceConfig {
     std::chrono::milliseconds startup_timeout{5000};
     std::chrono::milliseconds read_timeout{100};
     std::shared_ptr<const CaptureTimeline> timeline;
+    std::chrono::milliseconds no_data_timeout{5000};
 };
 
 class CameraVideoSource final : public VideoSource {
@@ -55,6 +56,7 @@ public:
     bool is_live() const override {
         return true;
     }
+    void check_health() const override;
     void resume() override;
     void stop() override;
     VideoFrameQueueStats queue_stats() const;
@@ -71,7 +73,7 @@ private:
     std::atomic<bool> stopping_{false};
     // ended_ 只由消费者读取队列结果后更新，避免 read(false)/ended() 之间生产者结束的竞态。
     bool ended_ = false;
-    std::mutex startup_mutex_;
+    mutable std::mutex startup_mutex_;
     std::condition_variable startup_wake_;
     bool ready_ = false;
     bool producer_done_ = false;

@@ -60,6 +60,11 @@ int main() {
               options.video_path.empty() && options.port == 9000);
         check(rtsp::app::parse_server_options({"--microphone-device", "USB 麦克风"}).microphone_device == "USB 麦克风");
         check(rtsp::app::parse_server_options({"--synthetic-audio"}).synthetic_audio);
+        options = rtsp::app::parse_server_options({"--camera", "0", "--microphone", "1"});
+        check(options.camera_index == 0 && options.microphone_index == 1 && options.send_buffer_ms == 150);
+        options = rtsp::app::parse_server_options({"--synthetic-video", "--synthetic-audio",
+            "--send-buffer-ms", "0", "--fps", "25"});
+        check(options.synthetic_video && options.synthetic_audio && options.gop == 25 && options.send_buffer_ms == 0);
         options = rtsp::app::parse_server_options({"--camera", "0", "--fps", "60", "--bind", "0.0.0.0"});
         check(options.camera() && options.camera_index == 0 && options.gop == 60 && options.video_path.empty());
         options = rtsp::app::parse_server_options({"--device", "USB 摄像头", "--width", "640", "--height", "480",
@@ -68,7 +73,7 @@ int main() {
               && options.fps == 25 && options.bitrate == 1000000 && options.gop == 50
               && options.pixel_format == "bgr24" && options.port == 9000);
         for (const auto& args : std::vector<std::vector<std::string>>{
-                 {"--camera"}, {"--camera", "--fps", "30"}, {"--camera", "-1"}, {"--camera", "1x"}, {"--device", ""}, {"--camera", "0", "--device", "x"}, {"--fps", "30"}, {"--camera", "0", "--width", "641"}, {"--camera", "0", "--height", "0"}, {"--camera", "0", "--fps", "241"}, {"--camera", "0", "--bitrate", "2147483648"}, {"--camera", "0", "--gop", "0"}, {"--camera", "0", "--pixel-format", "mjpeg"}, {"--camera", "0", "--port", "0"}, {"--camera", "0", "--port", "999999999999999999"}, {"--camera", "0", "--camera", "1"}, {"--camera", "0", "sample.h264"}, {"8554", "127.0.0.1", "--camera", "0"}, {"--list-cameras", "--camera", "0"}, {"--microphone", "-1"}, {"--microphone"}, {"--microphone-device", ""}, {"--microphone", "0", "--camera", "0"}, {"--microphone", "0", "--microphone-device", "x"}, {"--synthetic-audio", "--microphone", "0"}, {"--synthetic-audio", "--fps", "30"}, {"--list-microphones", "--port", "9000"}, {"--not-an-option"}, {"1", "2", "3", "4", "5"}}) {
+                 {"--camera"}, {"--camera", "--fps", "30"}, {"--camera", "-1"}, {"--camera", "1x"}, {"--device", ""}, {"--camera", "0", "--device", "x"}, {"--fps", "30"}, {"--camera", "0", "--width", "641"}, {"--camera", "0", "--height", "0"}, {"--camera", "0", "--fps", "241"}, {"--camera", "0", "--bitrate", "2147483648"}, {"--camera", "0", "--gop", "0"}, {"--camera", "0", "--pixel-format", "mjpeg"}, {"--camera", "0", "--port", "0"}, {"--camera", "0", "--port", "999999999999999999"}, {"--camera", "0", "--camera", "1"}, {"--camera", "0", "sample.h264"}, {"8554", "127.0.0.1", "--camera", "0"}, {"--list-cameras", "--camera", "0"}, {"--microphone", "-1"}, {"--microphone"}, {"--microphone-device", ""}, {"--camera", "0", "--synthetic-video"}, {"--synthetic-audio", "--send-buffer-ms", "150"}, {"--synthetic-video", "--synthetic-audio", "--send-buffer-ms", "-1"}, {"--synthetic-video", "--synthetic-audio", "--send-buffer-ms", "201"}, {"--microphone", "0", "--microphone-device", "x"}, {"--synthetic-audio", "--microphone", "0"}, {"--synthetic-audio", "--fps", "30"}, {"--list-microphones", "--port", "9000"}, {"--not-an-option"}, {"1", "2", "3", "4", "5"}}) {
             rejects(args);
         }
         unicode_file_paths();

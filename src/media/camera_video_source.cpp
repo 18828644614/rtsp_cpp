@@ -59,7 +59,8 @@ CameraVideoSource::CameraVideoSource(std::unique_ptr<CameraFrameInput> input,
                                      CameraVideoSourceConfig config,
                                      const std::atomic<bool>* stop_requested)
     : input_(std::move(input)), config_(config), queue_(config.queue) {
-    if (!input_ || config.startup_timeout.count() <= 0 || config.read_timeout.count() <= 0) {
+    if (!input_ || config.startup_timeout.count() <= 0 || config.read_timeout.count() <= 0 ||
+        config.no_data_timeout.count() <= 0) {
         throw std::invalid_argument("camera source requires input and positive timeouts");
     }
     worker_ = std::thread(&CameraVideoSource::produce, this);
@@ -127,6 +128,7 @@ void CameraVideoSource::produce() noexcept {
         encoder_config.use_capture_timeline = static_cast<bool>(config_.timeline);
         encoder.open(encoder_config);
         CameraTimeMapper mapper;
+        auto last_data = std::chrono::steady_clock::now();
         while (!stopping_.load()) {
             // 准备一个原始图像容器，向输入对象请求下一张图像，并取得读取状态
             CameraFrame frame;
@@ -136,12 +138,16 @@ void CameraVideoSource::produce() noexcept {
                 break;
             }
             if (result == CameraInputResult::Waiting) {
+                if (std::chrono::steady_clock::now() - last_data >= config_.no_data_timeout) {
+                    throw std::runtime_error("camera stopped producing frames");
+                }
                 continue;
             }
             if (result == CameraInputResult::Ended) {
                 publish(encoder.flush(), encoder);
                 break;
             }
+            last_data = std::chrono::steady_clock::now();
             if (config_.timeline) {
                 frame.capture_pts_us = mapper.map(frame, *config_.timeline);
             }
@@ -170,6 +176,16 @@ bool CameraVideoSource::read(H264AccessUnit& frame) {
 
 bool CameraVideoSource::ended() const {
     return ended_;
+}
+
+void CameraVideoSource::check_health() const {
+    std::lock_guard<std::mutex> lock(startup_mutex_);
+    if (producer_done_) {
+        if (startup_error_) {
+            std::rethrow_exception(startup_error_);
+        }
+        throw std::runtime_error("camera input ended");
+    }
 }
 const MediaTrack& CameraVideoSource::track() const {
     return track_;

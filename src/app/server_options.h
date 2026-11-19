@@ -27,9 +27,11 @@ struct ServerOptions {
     std::string microphone_device;
     bool list_microphones = false;
     bool synthetic_audio = false;
+    bool synthetic_video = false;
+    int send_buffer_ms = 150;
     bool help = false;
     bool camera() const {
-        return camera_index >= 0 || !device_name.empty();
+        return camera_index >= 0 || !device_name.empty() || synthetic_video;
     }
     bool audio() const {
         return microphone_index >= 0 || !microphone_device.empty() || synthetic_audio;
@@ -104,10 +106,15 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
             options.synthetic_audio = true;
             continue;
         }
+        if (option == "--synthetic-video") {
+            options.synthetic_video = true;
+            continue;
+        }
         if (option != "--camera" && option != "--device" && option != "--port" &&
             option != "--bind" && option != "--width" && option != "--height" &&
             option != "--fps" && option != "--bitrate" && option != "--gop" &&
-            option != "--pixel-format" && option != "--microphone" && option != "--microphone-device") {
+            option != "--pixel-format" && option != "--microphone" &&
+            option != "--microphone-device" && option != "--send-buffer-ms") {
             throw std::invalid_argument("unknown option: " + option);
         }
         if (++index == args.size()) {
@@ -141,6 +148,8 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
             options.microphone_index = server_number(value, 0, 10000, option);
         } else if (option == "--microphone-device") {
             options.microphone_device = value;
+        } else if (option == "--send-buffer-ms") {
+            options.send_buffer_ms = server_number(value, 0, 200, option);
         }
     }
     if (options.list_cameras) {
@@ -155,23 +164,24 @@ inline ServerOptions parse_server_options(const std::vector<std::string>& args) 
         }
         return options;
     }
-    if (options.audio()) {
-        const int selections = (options.microphone_index >= 0 ? 1 : 0) +
-            (!options.microphone_device.empty() ? 1 : 0) + (options.synthetic_audio ? 1 : 0);
-        if (selections != 1 || options.camera()) {
-            throw std::invalid_argument("select one audio input; combined camera/microphone mode is not available yet");
-        }
-        for (const auto& option : seen) {
-            if (option != "--microphone" && option != "--microphone-device" &&
-                option != "--synthetic-audio" && option != "--port" && option != "--bind") {
-                throw std::invalid_argument("unsupported audio-mode option: " + option);
+    if (!options.camera() && !options.audio()) {
+        throw std::invalid_argument("select a video or audio input");
+    }
+    if ((options.camera_index >= 0) + !options.device_name.empty() + options.synthetic_video > 1) {
+        throw std::invalid_argument("select one of --camera, --device or --synthetic-video");
+    }
+    if ((options.microphone_index >= 0) + !options.microphone_device.empty() + options.synthetic_audio > 1) {
+        throw std::invalid_argument("select one of --microphone, --microphone-device or --synthetic-audio");
+    }
+    if (seen.count("--send-buffer-ms") && !(options.camera() && options.audio())) {
+        throw std::invalid_argument("--send-buffer-ms requires both live tracks");
+    }
+    if (!options.camera()) {
+        for (const char* option : {"--width", "--height", "--fps", "--bitrate", "--gop", "--pixel-format"}) {
+            if (seen.count(option)) {
+                throw std::invalid_argument(std::string(option) + " requires a video input");
             }
         }
-        options.video_path.clear();
-        return options;
-    }
-    if (!options.camera() || (options.camera_index >= 0 && !options.device_name.empty())) {
-        throw std::invalid_argument("select exactly one of --camera INDEX or --device NAME");
     }
     if (options.width % 2 || options.height % 2) {
         throw std::invalid_argument("camera dimensions must be even");

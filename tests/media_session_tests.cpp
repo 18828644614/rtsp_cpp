@@ -291,7 +291,7 @@ public:
             return false;
         }
         ready = false;
-        frame = {{std::string("\x65\x30", 2)}, true, pts, 3000};
+        frame = {{std::string{static_cast<char>(keyframe ? 0x65 : 0x41), '0'}}, keyframe, pts, 3000};
         return true;
     }
     bool ended() const override {
@@ -303,6 +303,11 @@ public:
     bool is_live() const override {
         return true;
     }
+    void check_health() const override {
+        if (fail || eof) {
+            throw std::runtime_error("simulated live video unavailable");
+        }
+    }
     void resume() override {
         ++resumes;
     }
@@ -310,6 +315,7 @@ public:
         stopped = true;
     }
     bool ready = false;
+    bool keyframe = true;
     bool eof = false;
     bool fail = false;
     bool stopped = false;
@@ -493,6 +499,11 @@ public:
     bool is_live() const override {
         return true;
     }
+    void check_health() const override {
+        if (fail || eof) {
+            throw std::runtime_error("simulated live audio unavailable");
+        }
+    }
     void resume() override {
         ++resumes;
     }
@@ -596,6 +607,123 @@ void test_capture_timeline() {
     media.tick(epoch + 650ms);
     check(resumed.queue->try_pop(message) && message.kind == rtsp::net::OutboundKind::Rtp,
           "resumed peer did not receive video at the original deadline");
+}
+
+void test_live_backlog_and_resume() {
+    using namespace std::chrono_literals;
+    const auto epoch = Clock::now();
+    auto video = std::make_unique<WaitingSource>();
+    auto audio = std::make_unique<WaitingAudioSource>();
+    auto& v = *video;
+    auto& a = *audio;
+    rtsp::MediaSession media(std::move(video), std::move(audio),
+        std::make_shared<const rtsp::CaptureTimeline>(epoch));
+    const auto& tracks = media.description().tracks;
+    const auto play_both = [&](Peer& peer) {
+        peer.subscription->add_track(1, tracks[1], {2, 3}, 200, 2);
+        check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+              "live PLAY rejected");
+        check(pop(peer).kind == rtsp::net::OutboundKind::RtspResponse, "RTP preceded PLAY");
+    };
+    const auto feed_video = [&](int ms, bool idr) {
+        v.pts = ms * 90;
+        v.keyframe = idr;
+        v.ready = true;
+    };
+    const auto feed_audio = [&](int pts) {
+        a.pts = pts;
+        a.ready = true;
+    };
+    const auto rtp = [&](Peer& peer, unsigned int channel) {
+        check(!peer.queue->empty(), "missing live RTP");
+        const auto message = pop(peer);
+        rtsp::RtspStreamParser parser;
+        parser.append(message.wire.data(), message.wire.size());
+        rtsp::RtspStreamItem item;
+        check(parser.next(item) && item.is_interleaved && item.channel == channel, "wrong live RTP track");
+        return rtsp::parse_rtp_packet(item.payload);
+    };
+    const auto expect_idr = [&](Peer& peer, std::uint32_t timestamp) {
+        const auto packet = rtp(peer, 0);
+        check(packet.timestamp == timestamp && packet.payload[0] == 0x65, "incorrect IDR or RTP origin");
+    };
+
+    Peer first(tracks[0]), late(tracks[0]), resumed(tracks[0]);
+    play_both(first);
+    feed_video(0, true);
+    feed_audio(0);
+    media.tick(epoch + 150ms);
+    expect_idr(first, 0);
+    check(rtp(first, 2).timestamp == 0, "incorrect first audio timestamp");
+
+    play_both(late);
+    check(v.resumes == 1 && a.resumes == 0, "late join reset shared queues");
+    feed_video(33, false);
+    feed_audio(1024);
+    media.tick(epoch + 250ms);
+    check(first.queue->empty() && late.queue->empty(), "overdue RTP was replayed");
+
+    feed_video(100, false);
+    feed_audio(5120);
+    media.tick(epoch + 257ms);
+    check(rtp(first, 2).timestamp == 5120 && first.queue->empty() && late.queue->empty(),
+          "lost the AAC gap or sent a P frame with a missing reference");
+
+    feed_video(120, true);
+    feed_audio(6144);
+    media.tick(epoch + 278ms);
+    expect_idr(first, 10800);
+    expect_idr(late, 0);
+    check(rtp(first, 2).timestamp == 6144 && rtp(late, 2).timestamp == 384,
+          "late join did not preserve audio offset");
+
+    feed_video(200, true);
+    feed_audio(10240);
+    media.tick(epoch + 300ms);  // Prefetch both AUs, then lose all viewers.
+    first.subscription->cancel();
+    late.subscription->cancel();
+    media.tick(epoch + 1s);
+    check(!media.next_deadline(), "idle session kept a send deadline");
+    play_both(resumed);
+    check(v.resumes == 2 && a.resumes == 0, "idle resume discarded usable audio");
+    feed_video(500, true);  // Even the newest queued IDR is far too old.
+    feed_audio(24576);
+    media.tick(epoch + 1150ms);
+    check(resumed.queue->empty() && !v.ready && !a.ready, "idle resume retained or sent stale AUs");
+    feed_video(1100, true);
+    feed_audio(53248);
+    media.tick(epoch + 1260ms);
+    expect_idr(resumed, 0);
+    check(rtp(resumed, 2).timestamp == 448, "idle resume lost the IDR-relative audio offset");
+}
+
+void test_required_live_source_failure() {
+    for (bool active : {false, true}) {
+        for (bool video_fails : {false, true}) {
+            auto video = std::make_unique<WaitingSource>();
+            auto audio = std::make_unique<WaitingAudioSource>();
+            auto& v = *video;
+            auto& a = *audio;
+            const auto now = Clock::now();
+            rtsp::MediaSession media(std::move(video), std::move(audio),
+                std::make_shared<const rtsp::CaptureTimeline>(now));
+            Peer peer(media.description().tracks[0]);
+            if (active) {
+                check(media.subscribe(peer.subscription, "PLAY 200") == rtsp::SubscribeResult::Started,
+                      "live session rejected PLAY before failure");
+            }
+            v.fail = video_fails;
+            a.eof = !video_fails;
+            media.tick(now);
+            check(media.ended() && v.stopped && a.stops == 1 && v.reads == 0 && a.reads == 0,
+                  "producer failure did not stop both tracks before reading more data");
+            check(!active || (peer.subscription->failed() && peer.queue->closed()),
+                  "active playback did not fail with the source");
+            Peer later(media.description().tracks[0]);
+            check(media.subscribe(later.subscription, "PLAY 200") == rtsp::SubscribeResult::Ended,
+                  "unavailable stream still accepted PLAY");
+        }
+    }
 }
 
 void test_audio_waiting_and_end() {
@@ -783,6 +911,8 @@ int main() {
         test_injected_audio_file(false);
         test_injected_audio_file(true);
         test_capture_timeline();
+        test_live_backlog_and_resume();
+        test_required_live_source_failure();
         test_audio_waiting_and_end();
         test_audio_resume_and_stop();
         test_audio_wait_with_future_video();

@@ -135,6 +135,7 @@ private:
     bool started_ = false;
     bool ended_ = false;
     bool reset_clock_ = true;
+    bool waiting_for_idr_ = false;
     Clock::time_point clock_origin_{};
     std::optional<Clock::time_point> next_deadline_;
     // 各轨道保留一份待发负载，tick 内以常量引用同步分发，不转移所有权。

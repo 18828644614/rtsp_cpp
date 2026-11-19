@@ -1,4 +1,8 @@
 #include "app/synthetic_camera_frame.h"
+#include "media/audio_source.h"
+#ifdef RTSP_TEST_DUAL_LIVE
+#include "app/synthetic_audio_input.h"
+#endif
 #include "media/camera_video_source.h"
 #include "media/h264_depacketizer.h"
 #include "rtp/rtcp_packet.h"
@@ -57,8 +61,9 @@ struct InputState {
 // 第一帧用于源启动握手，后续帧既受测试许可控制，也按真实帧率推进。
 class PacedInput final : public rtsp::CameraFrameInput {
 public:
-    PacedInput(std::shared_ptr<InputState> state, rtsp::H264EncoderConfig config, bool noise)
-        : state_(std::move(state)), config_(config), noise_(noise) {}
+    PacedInput(std::shared_ptr<InputState> state, rtsp::H264EncoderConfig config, bool noise,
+               bool capture_timing)
+        : state_(std::move(state)), config_(config), noise_(noise), capture_timing_(capture_timing) {}
     rtsp::CameraInputResult read(rtsp::CameraFrame& frame, std::chrono::milliseconds timeout) override {
         const auto deadline = Clock::now() + timeout;
         std::unique_lock<std::mutex> lock(state_->mutex);
@@ -83,6 +88,11 @@ public:
         lock.unlock();
         frame = rtsp::app::synthetic_camera_frame(config_.width, config_.height,
             config_.pixel_format, config_.fps_num, 1, index_);
+        if (capture_timing_) {
+            frame.source_pts.reset();
+            frame.arrival_steady_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                Clock::now().time_since_epoch()).count();
+        }
         if (noise_) {
             std::uint32_t bits = 1234567u + static_cast<std::uint32_t>(index_);
             for (int y = 0; y < config_.height; ++y) {
@@ -115,6 +125,7 @@ private:
     std::shared_ptr<InputState> state_;
     const rtsp::H264EncoderConfig config_;
     const bool noise_;
+    const bool capture_timing_;
     int index_ = 0;
     Clock::time_point due_ = Clock::now();
 };
@@ -129,18 +140,21 @@ rtsp::CameraVideoSourceConfig configuration(bool noise = false) {
     config.read_timeout = 10ms;
     return config;
 }
-std::unique_ptr<rtsp::CameraVideoSource> source(const std::shared_ptr<InputState>& state, bool noise = false) {
+std::unique_ptr<rtsp::CameraVideoSource> source(const std::shared_ptr<InputState>& state, bool noise = false,
+    std::shared_ptr<const rtsp::CaptureTimeline> timeline = nullptr) {
     auto config = configuration(noise);
+    config.timeline = std::move(timeline);
     return std::make_unique<rtsp::CameraVideoSource>(
-        std::make_unique<PacedInput>(state, config.encoder, noise), config);
+        std::make_unique<PacedInput>(state, config.encoder, noise, static_cast<bool>(config.timeline)), config);
 }
 
 struct Server {
     rtsp::RtspServer server;
     std::thread worker;
     std::exception_ptr failure;
-    explicit Server(std::unique_ptr<rtsp::VideoSource> input)
-        : server("127.0.0.1", 0, std::move(input), runtime()) {
+    explicit Server(std::unique_ptr<rtsp::VideoSource> input, std::unique_ptr<rtsp::AudioSource> audio = nullptr,
+                    std::shared_ptr<const rtsp::CaptureTimeline> timeline = nullptr)
+        : server("127.0.0.1", 0, std::move(input), std::move(audio), std::move(timeline), 150ms, runtime()) {
         worker = std::thread([this] {
             try {
                 server.run();
@@ -189,6 +203,7 @@ public:
     bool played = false;
     bool fragmented = false;
     int units = 0;
+    int audio_units = 0;
     int byes = 0;
     std::vector<std::uint64_t> pictures;
     std::vector<std::uint32_t> timestamps;
@@ -244,16 +259,24 @@ public:
             receive(20);
         }
     }
-    void setup() {
+    void setup(bool dual = false) {
         const auto description = exchange("DESCRIBE");
         const auto sdp = rtsp::parse_sdp(description.body);
-        check(sdp.tracks.size() == 1 && sdp.tracks[0].clock_rate == 90000, "camera SDP track mismatch");
+        check(sdp.tracks.size() == (dual ? 2u : 1u) && sdp.tracks[0].clock_rate == 90000,
+              "camera SDP track mismatch");
         fmtp = sdp.tracks[0].fmtp;
         check(fmtp.find("profile-level-id=") != std::string::npos
               && fmtp.find("sprop-parameter-sets=") != std::string::npos, "missing camera SPS/PPS in SDP");
         const auto response = exchange("SETUP", "/trackID=0",
                                        "Transport: RTP/AVP/TCP;unicast;interleaved=6-7\r\n");
         session_ = "Session: " + rtsp::session_id_from_header(response.header("Session")) + "\r\n";
+        if (dual) {
+            const auto& audio = sdp.tracks[1];
+            check(audio.encoding == "MPEG4-GENERIC" && audio.clock_rate == 48000 && audio.channels == 1,
+                  "live AAC SDP mismatch");
+            exchange("SETUP", "/trackID=1", session_ +
+                     "Transport: RTP/AVP/TCP;unicast;interleaved=8-9\r\n");
+        }
     }
     void play(int expected = 200) {
         const auto response = exchange("PLAY", "", session_ + "Range: npt=0.000-\r\n", expected);
@@ -335,12 +358,21 @@ private:
     }
     void consume(const rtsp::RtspStreamItem& item) {
         check(item.is_interleaved && played, "media preceded PLAY response");
-        if (item.channel == 7) {
+        if (item.channel == 7 || item.channel == 9) {
             for (const auto& report : rtsp::parse_rtcp_compound(item.payload)) {
                 if (report.type == 203) {
                     ++byes;
                 } // RTCP BYE
             }
+            return;
+        }
+        if (item.channel == 8) {
+            const auto rtp = rtsp::parse_rtp_packet(item.payload);
+            check(units > 0 && rtp.payload_type == 97 && rtp.sequence_number == audio_sequence_++
+                      && rtp.marker && rtp.payload.size() > 4, "live AAC RTP mismatch or arrived before IDR");
+            check(!audio_units || rtp.timestamp > audio_timestamp_, "live AAC timestamps stopped advancing");
+            audio_timestamp_ = rtp.timestamp;
+            ++audio_units;
             return;
         }
         check(item.channel == 6, "wrong camera RTP channel");
@@ -401,6 +433,8 @@ private:
     int width_, height_;
     int cseq_ = 0;
     std::uint16_t sequence_ = 100;
+    std::uint16_t audio_sequence_ = 100;
+    std::uint32_t audio_timestamp_ = 0;
     std::optional<std::uint32_t> timestamp_;
     bool idr_ = false;
     std::string session_, au_, sps_, pps_;
@@ -566,6 +600,53 @@ void test_slow_client() {
     server.stop();
     check(state->closed.load(), "slow-client shutdown leaked camera input");
 }
+
+#ifdef RTSP_TEST_DUAL_LIVE
+void test_dual_live() {
+    const auto timeline = std::make_shared<const rtsp::CaptureTimeline>();
+    const auto state = std::make_shared<InputState>();
+    auto video = source(state, true, timeline);
+    rtsp::MicrophoneAudioSourceConfig config;
+    config.timeline = timeline;
+    auto audio = std::make_unique<rtsp::MicrophoneAudioSource>(
+        std::make_unique<rtsp::app::SyntheticAudioInput>(0, 48000, 1, true), config);
+    Server server(std::move(video), std::move(audio), timeline);
+    const auto port = server.server.local_port();
+
+    Peer slow(port, true, 640, 360);
+    slow.setup(true);
+    slow.play();
+    state->allow(600);
+    await([&] { return slow.socket.wait_readable(0); });
+    Peer late(port, false, 640, 360);
+    late.setup(true);
+    late.play();
+    late.wait_units(2);
+
+    const auto deadline = Clock::now() + 12s;
+    while (server.server.connection_count() != 1) {
+        check(Clock::now() < deadline && !late.eof, "dual-track slow client was not isolated");
+        late.pump(10);
+    }
+    const int previous_audio = late.audio_units;
+    late.wait_units(late.units + 8);
+    check(late.audio_units > previous_audio && late.fragmented, "surviving peer lost a track");
+    late.socket.close();
+    await([&] { return server.server.connection_count() == 0; });
+
+    const int before_idle = state->produced.load();
+    await([&] { return state->produced.load() >= before_idle + 12; });
+    Peer resumed(port, false, 640, 360);
+    resumed.setup(true);
+    resumed.play();
+    resumed.wait_units(8);
+    check(resumed.audio_units > 0, "idle resume lost AAC");
+
+    resumed.socket.close();
+    server.stop();
+    check(state->closed.load(), "dual-track shutdown leaked the camera input");
+}
+#endif
 }
 
 int main(int argc, char* argv[]) {
@@ -590,6 +671,9 @@ int main(int argc, char* argv[]) {
         test_stop_and_failure(true);
         test_bind_failure();
         test_slow_client();
+#ifdef RTSP_TEST_DUAL_LIVE
+        test_dual_live();
+#endif
         std::cout << "PASS: camera TCP SDP, IDR, late join, decode, resume, slow client, failure and stop\n";
         return 0;
     } catch (const std::exception& error) {

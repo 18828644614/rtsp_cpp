@@ -10,6 +10,9 @@
 #include <utility>
 
 namespace rtsp {
+namespace {
+constexpr std::chrono::milliseconds max_live_lateness{50};
+}
 
 MediaSubscription::MediaSubscription(std::shared_ptr<net::OutboundQueue> queue)
     : queue_(std::move(queue)) {
@@ -325,10 +328,14 @@ SubscribeResult MediaSession::subscribe(const std::shared_ptr<MediaSubscription>
         if (video_source_ && video_source_->is_live()) {
             video_.reset();
             video_source_->resume();
+            waiting_for_idr_ = static_cast<bool>(timeline_);
         }
         if (audio_source_ && audio_source_->is_live()) {
             audio_.reset();
-            audio_source_->resume();
+            // 双轨保留有界音频队列，避免删掉 IDR 之后本来可发送的 AU。
+            if (!timeline_ || !video_source_) {
+                audio_source_->resume();
+            }
         }
         if (!timeline_) {
             reset_clock_ = true;
@@ -382,6 +389,11 @@ void MediaSession::tick(Clock::time_point now) {
         return;
     }
     try {
+        const bool require_both_live_tracks = timeline_ && video_source_ && audio_source_;
+        if (require_both_live_tracks) {
+            video_source_->check_health();
+            audio_source_->check_health();
+        }
         // 单轮最多推进 32 个 AU，媒体落后时也要让出网络处理机会。
         // AU 可以理解为一份完整的编码媒体单元：
         // - H.264 通常是一帧访问单元；
@@ -422,6 +434,9 @@ void MediaSession::tick(Clock::time_point now) {
                     audio_ = audio_packetizer_.packetize(frame, audio_source_->track().clock_rate);
                 }
             }
+            if (require_both_live_tracks && (video_source_->ended() || audio_source_->ended())) {
+                throw std::runtime_error(video_source_->ended() ? "video input ended" : "audio input ended");
+            }
             if (!video_ && !audio_) {
                 if ((!video_source_ || video_source_->ended())
                     && (!audio_source_ || audio_source_->ended())) {
@@ -437,7 +452,8 @@ void MediaSession::tick(Clock::time_point now) {
                                                      video_->pts, video_->clock_rate))) {
                 send_video = true;
             }
-            const RtpPayloadUnit& unit = *(send_video ? video_ : audio_);
+            auto& pending = send_video ? video_ : audio_;
+            const RtpPayloadUnit& unit = *pending;
             const std::size_t track_index = send_video ? video_track_ : audio_track_;
             const auto media_time = std::chrono::microseconds(rescale_media_pts(unit.pts, unit.clock_rate, 1000000));
             if (!timeline_ && reset_clock_) {
@@ -458,14 +474,19 @@ void MediaSession::tick(Clock::time_point now) {
                 }
                 return;
             }
-            for (const auto& subscriber : subscribers) {
-                subscriber->deliver(track_index, unit, media_at);
+            const bool late = timeline_ && now > send_at + max_live_lateness;
+            if (send_video && late) {
+                waiting_for_idr_ = true;
             }
-            if (send_video) {
-                video_.reset();
-            } else {
-                audio_.reset();
+            if (!late && (!send_video || !waiting_for_idr_ || unit.is_keyframe)) {
+                if (send_video) {
+                    waiting_for_idr_ = false;
+                }
+                for (const auto& subscriber : subscribers) {
+                    subscriber->deliver(track_index, unit, media_at);
+                }
             }
+            pending.reset();
             // 一条轨道 EOF 不关闭连接；两条轨道均发送完才统一结束。
             if (!video_ && !audio_ && (!video_source_ || video_source_->ended())
                 && (!audio_source_ || audio_source_->ended())) {

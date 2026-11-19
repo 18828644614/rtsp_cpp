@@ -20,6 +20,8 @@ public:
     virtual bool is_live() const {
         return false;
     }
+    // 不消费帧；必需实时源的生产者退出时抛异常。
+    virtual void check_health() const {}
     // 无订阅者后的首次订阅；实时源丢弃积压并从可解码的 IDR 恢复。
     virtual void resume() {}
     // MediaSession 停止或结束时回收生产资源；由所属事件循环线程调用。

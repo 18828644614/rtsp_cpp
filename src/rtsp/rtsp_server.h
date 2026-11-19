@@ -17,6 +17,7 @@ class RtspServerConnection;
 class MediaSession;
 class VideoSource;
 class AudioSource;
+class CaptureTimeline;
 
 class RtspServer {
 public:
@@ -27,6 +28,9 @@ public:
                RuntimeOptions options = {});
     RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
                std::unique_ptr<AudioSource> audio_source, RuntimeOptions options = {});
+    RtspServer(std::string address, std::uint16_t port, std::unique_ptr<VideoSource> video_source,
+               std::unique_ptr<AudioSource> audio_source, std::shared_ptr<const CaptureTimeline> timeline,
+               std::chrono::milliseconds send_buffer, RuntimeOptions options = {});
     ~RtspServer();
 
     RtspServer(const RtspServer&) = delete;

@@ -415,3 +415,36 @@ rg: build*/CMakeCache.txt: IO error for operation on build*/CMakeCache.txt
 ### Metadata
 - Related Files: src/media/media_session.cpp, src/rtsp/rtsp_server_connection.cpp, tests/verify_audio_encoding.py
 - Reproducible: yes (zero RTP origin); intermittent (DLL copy)
+
+## [ERR-20261119-WCL] windows_long_markdown_command
+
+**Logged**: 2026-11-19
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### 摘要（Summary）
+在 Windows 上通过 exec_command 一次性传入较长 Markdown 内容，命令尚未启动就触发进程创建长度限制。
+
+### 原始错误（Error）
+```text
+exec_command failed: CreateProcess { message: "Rejected(\"Failed to create unified exec process: 文件名或扩展名太长。 (os error 206)\")" }
+```
+
+### 上下文（Context）
+- 任务为创建视频链路学习文档。
+- 长正文直接嵌入 PowerShell here-string，启动参数超过系统限制，目标文件未创建。
+
+### 建议修复（Suggested Fix）
+长文件内容分段写入，或者使用持久 JavaScript 运行时的文件接口，避免把完整正文放进单次 shell 启动参数。
+
+### 元数据（Metadata）
+- Reproducible: yes
+- Related Files: FFmpeg视频链路详解.md
+- Tags: windows, exec_command, markdown, command-length
+
+### 解决情况（Resolution）
+- **Resolved**: 2026-11-19
+- **Notes**: 已改为分段写入 UTF-8 文档，并检查目录锚点、代码块围栏、源码链接与编码。
+
+---

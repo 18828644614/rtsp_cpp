@@ -1,6 +1,6 @@
 # 音视频同步与实时麦克风采集实现方案
 
-> 更新：2026-11-19。阶段 1～4 已实现，阶段 5～6 仍为计划。阶段 3 的接口和验证见 [独立音频编码实现说明](audio_encoding_implementation.md)，阶段 4 的接线和测试见 [共同时间线实现](#阶段-4-共同时间线实现)。
+> 更新：2026-11-19。阶段 1～5 已实现，真实设备验收与阶段 6 待完成。阶段 3 的接口和验证见 [独立音频编码实现说明](audio_encoding_implementation.md)，阶段 5 的无设备验证见 [双轨实时行为实现](#阶段-5-双轨实时行为实现)。
 > 目标环境：Windows；输入为摄像头与电脑麦克风；输出为 H.264 + AAC-LC 的 RTSP/TCP 双轨道。
 
 ## 1. 目标与范围
@@ -286,19 +286,19 @@ drift_us = audio_end_us - reference_end_us
 
 启动时检查 AAC 编码器、采样格式、frame_size 和音频设备。音频源的 track 配置必须在生成 SDP 前就绪，配置发布后保持不变。任一源启动失败或用户取消时，回收已启动的另一个源，不遗留线程和设备句柄。
 
-建议新增选项：
+服务器输入和同步选项：
 
 | 选项 | 含义 |
 | --- | --- |
 | `--list-microphones` | 已实现：只枚举麦克风，不采集 |
-| `--microphone INDEX` | 已实现：启动纯音频麦克风服务器 |
+| `--microphone INDEX` | 已实现：选择麦克风，可单独使用或与摄像头组合 |
 | `--microphone-device NAME` | 已实现：按名称选择麦克风，与 INDEX 互斥 |
-| `--synthetic-audio` | 已实现：无需设备的纯音频服务器 |
+| `--synthetic-audio` / `--synthetic-video` | 已实现：对应轨道使用合成输入，无需设备 |
 | `--audio-bitrate N` | 待实现；当前 AAC 默认 64000 bit/s |
-| `--send-buffer-ms N` | 待实现：两轨共同发送缓冲预算 |
+| `--send-buffer-ms N` | 已实现：双轨共同发送缓冲，0～200 ms，默认 150 ms |
 | `--audio-offset-ms N` | 待实现：经校准的音频时间偏移；正值表示相同音频采样在媒体时间线上向后移动 |
 
-第一版编码采样率和声道固定为 48000/1。阶段 3 已提供纯音频服务器和独立 aac_encode_probe；“摄像头 + 麦克风”组合模式仍待实现。以下示例中的双轨启动命令尚不可运行：
+第一版编码采样率和声道固定为 48000/1。使用真实设备时开启两个采集开关和两个编码开关：
 
 ```powershell
 cmake -S . -B build-av -DENABLE_CAMERA_CAPTURE=ON -DENABLE_H264_ENCODING=ON -DENABLE_MICROPHONE_CAPTURE=ON -DENABLE_AAC_ENCODING=ON -DFFMPEG_ROOT="C:/path/to/ffmpeg-sdk"
@@ -315,15 +315,22 @@ cmake --build build-av --config Debug
 | 2：独立采集 | 新增麦克风枚举、PCM 采集、probe 和可停止读取 | 有设备时连续采集正常；无设备时明确报错；停止能释放设备 |
 | 3：独立音频编码（已实现） | 重采样、FIFO、AAC、配置生成、音频源、最小有符号 PTS；纯音频测试会话 | 已用外部 FFmpeg 验证解码、连续采样/PTS、padding 和脉冲位置；真实设备验收边界见实现说明 |
 | 4：共同时间线（已实现） | 注入 CaptureTimeline；改造视频模式；分开采集时刻与发送期限 | 合成轨道验证 RTP/RTCP 保留 120 ms 启动差，并可反推原始采集时刻 |
-| 5：实时行为 | 接通双轨服务器入口；处理晚加入、积压、无人观看和设备失败 | 多客户端互不拖累，恢复不补发过期历史数据 |
+| 5：实时行为（已实现） | 接通双轨服务器入口；处理晚加入、积压、无人观看和设备失败 | 合成输入通过双客户端、慢连接隔离、空闲恢复及故障回收测试 |
 | 6：漂移与验收 | 统计、时钟映射验证、受限重采样补偿和长时间测试 | 模拟漂移可被控制，真实设备测试无持续偏差增长趋势 |
 
 ### 阶段 4 共同时间线实现
 
-- 在启动设备前创建一个 `std::shared_ptr<const CaptureTimeline>`；将同一实例填到 `CameraVideoSourceConfig::timeline`、`MicrophoneAudioSourceConfig::timeline`，两路源就绪后传给 `MediaSession(video, audio, timeline)`。不注入则保留旧路径；目前只开放代码级注入，阶段 5 再接双轨命令行。
+- 在启动设备前创建一个 `std::shared_ptr<const CaptureTimeline>`；将同一实例填到 `CameraVideoSourceConfig::timeline`、`MicrophoneAudioSourceConfig::timeline`，两路源就绪后传给 `MediaSession(video, audio, timeline)`。不注入则保留旧路径。
 - 视频用首帧的单调到达时刻估计起始偏移，之后保留设备 PTS 增量。若首帧没有设备 PTS，则本轮用到达时刻；若从设备 PTS 模式中途丢失 PTS 或时间基改变，则报错。音频用首块到达时刻减块时长估计首采样，只整体平移 AAC 包 PTS，包含 flush 包和起始填充。到达时间只是估计，未校准实际设备延迟。
 - 会话默认用 `T0 + PTS + 150 ms` 决定发送期限，用 `T0 + PTS` 建立 RTCP 锚点。订阅恢复不改变 `T0`，晚加入仍从可解码的 IDR 起步。
 - `camera_video_source_tests` 和 `microphone_audio_source_tests` 用生成帧跑真实编码器，检查 80/200 ms 起点及负 AAC PTS。`media_session_tests` 用整数 tick 控制推进，验证发送期限、RTP 回绕、从不同报告时刻的 SR 反推出 80/200 ms，以及重新订阅不重置 `T0`。
+
+### 阶段 5 双轨实时行为实现
+
+- 双轨共用生产者和固定 `T0`。过了计划发送时刻 50 ms 的 AU 不再发送，丢 AAC 保留原 PTS，丢视频后等未过期的 IDR。默认设置下，约 200 ms 是共享调度的媒体年龄上限，不是客户端播放延迟。
+- 新观众只等待自己的首个 IDR，不动共享队列。无人观看时继续有界采集；恢复时清除两轨预读、重新选 IDR，并按同一规则过滤缓存。双轨音频保留至多 9 个 1024-sample AU（48 kHz 下约 192 ms）和原有字节上限。
+- 任一路生产失败、意外结束或持续无数据时，回收两路并结束直播订阅；空闲时也检查。慢连接仍由自身的出站队列或发送超时退出。
+- 无设备测试：默认构建 17/17，全功能构建 40/40；实际启动合成双轨服务器后，两个本地 FFmpeg 客户端均解码了 H.264 和 AAC。尚未验证真实设备拔出和实机同步误差。
 
 ## 12. 测试与验收
 

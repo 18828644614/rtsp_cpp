@@ -48,6 +48,7 @@ public:
     bool is_live() const override {
         return true;
     }
+    void check_health() const override;
     void resume() override;
     void stop() override;
     AudioFrameQueueStats queue_stats() const;
@@ -61,7 +62,7 @@ private:
     MediaTrack track_;
     std::atomic<bool> stopping_{false};
     bool ended_ = false;
-    std::mutex startup_mutex_;
+    mutable std::mutex startup_mutex_;
     std::condition_variable startup_wake_;
     bool ready_ = false;
     bool producer_done_ = false;

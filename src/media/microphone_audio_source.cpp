@@ -120,6 +120,16 @@ bool MicrophoneAudioSource::read(AacAccessUnit& frame) {
 bool MicrophoneAudioSource::ended() const {
     return ended_;
 }
+
+void MicrophoneAudioSource::check_health() const {
+    std::lock_guard<std::mutex> lock(startup_mutex_);
+    if (producer_done_) {
+        if (startup_error_) {
+            std::rethrow_exception(startup_error_);
+        }
+        throw std::runtime_error("microphone input ended");
+    }
+}
 const MediaTrack& MicrophoneAudioSource::track() const {
     return track_;
 }
