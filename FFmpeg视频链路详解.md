@@ -194,18 +194,18 @@ YUV420P 仍是原始像素。原始格式之间的转换也未必保留全部信
 
 ### 3.3 FFmpeg 核心对象
 
-| 类型 | 初学者可以怎样理解 | 本项目变量 |
-|---|---|---|
-| `AVInputFormat` | 输入方式的描述，例如 DirectShow | `device` |
-| `AVFormatContext` | 一个输入的管理对象 | `input` |
-| `AVStream` | 输入中的一条媒体流 | `stream` |
-| `AVCodecParameters` | 这条流的媒体参数 | `parameters`、`stream->codecpar` |
-| `AVCodec` | 某种编解码器的描述 | `codec`、`encoder` |
-| `AVCodecContext` | 本次编解码任务的参数和状态 | `decoder`、编码器的 `codec` |
-| `AVPacket` | 接口间传递的一包数据 | `packet` |
-| `AVFrame` | 原始图像及其属性、内存布局 | `decoded`、`converted` |
-| `SwsContext` | 像素转换的配置与状态 | `converter` |
-| `AVDictionary` | 参数字典 | `options` |
+| 类型                  | 初学者可以怎样理解             | 本项目变量                           |
+| ------------------- | --------------------- | ------------------------------- |
+| `AVInputFormat`     | 输入方式的描述，例如 DirectShow | `device`                        |
+| `AVFormatContext`   | 一个输入的管理对象             | `input`                         |
+| `AVStream`          | 输入中的一条媒体流             | `stream`                        |
+| `AVCodecParameters` | 这条流的媒体参数              | `parameters`、`stream->codecpar` |
+| `AVCodec`           | 某种编解码器的描述             | `codec`、`encoder`               |
+| `AVCodecContext`    | 本次编解码任务的参数和状态         | `decoder`、编码器的 `codec`          |
+| `AVPacket`          | 接口间传递的一包数据            | `packet`                        |
+| `AVFrame`           | 原始图像及其属性、内存布局         | `decoded`、`converted`           |
+| `SwsContext`        | 像素转换的配置与状态            | `converter`                     |
+| `AVDictionary`      | 参数字典                  | `options`                       |
 
 不要把 `AVPacket` 一律记成“压缩数据”。本项目编码输出包保存 H.264，而 rawvideo 输入包可以承载未压缩图像。
 

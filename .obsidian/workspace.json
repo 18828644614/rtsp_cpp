@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "USB摄像头RTSP实现框架.md",
+                "file": "FFmpeg视频链路详解.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "USB摄像头RTSP实现框架"
+              "title": "FFmpeg视频链路详解"
             }
           }
         ]
@@ -191,6 +191,8 @@
   },
   "active": "e7a4b080d834a31c",
   "lastOpenFiles": [
+    "FFmpeg音频链路详解.md",
+    "USB摄像头RTSP实现框架.md",
     "src/net/event_loop.cpp",
     "src/net/event_loop.h",
     "build/Testing/Temporary/CTestCostData.txt.tmp",
@@ -201,7 +203,6 @@
     "build/media_test_input.h264",
     "build/Testing/Temporary/CTestCheckpoint.txt",
     "build/Testing/Temporary/LastTest.log.tmp1cb4c",
-    "build/x64/Debug/ALL_BUILD/ALL_BUILD.tlog/unsuccessfulbuild",
     "项目类职责与关系.md",
     "tcp_aac_implementation.md",
     "README.md",
