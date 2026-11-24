@@ -91,3 +91,49 @@ AAC 编码和 RTP 互通必须分别保留包时间、核对 padding，并允许
 - Source: error
 - Related Files: src/media/aac_encoder.cpp, src/media/media_time.h, tests/aac_encoder_tests.cpp, tests/verify_audio_encoding.py
 - Tags: aac, padding, pts, rtcp, ffmpeg
+## [LRN-20261119-AUD] best_practice
+
+**Logged**: 2026-11-19
+**Priority**: high
+**Status**: pending
+**Area**: tests
+
+### Summary
+Synthetic audio decode tests do not establish continuity with real DirectShow capture buffers.
+
+### Details
+The Realtek microphone delivered 500 ms PCM blocks with its default buffer.
+MicrophoneAudioSource retains only nine AAC AUs (192 ms), and MediaSession drops
+audio older than its default 150 ms send buffer plus 50 ms lateness allowance.
+A four-second audio-source probe observed 105 queue drops with the default
+capture buffer, versus zero with an explicit 50 ms capture buffer. The latter
+also had zero observed PTS gaps and zero AUs older than 200 ms when read.
+This validates an audio-source defect, but does not establish full playback QA.
+
+### Suggested Action
+Set and validate capture block duration, cover bursty PCM input in regression
+tests, and count audio queue drops separately from scheduler late drops.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/media/microphone_capture.h, src/media/microphone_audio_source.h, src/media/media_session.cpp, .verify/audio-diagnostics/README.md
+- Tags: audio, dshow, continuity, buffering, hardware-validation
+
+### Follow-up (2026-11-24)
+
+The user's running Debug server reproduced the problem: a six-second companion
+player session decoded 67 AAC frames, recorded 10 PCM discontinuities, and
+displayed only 43 of 136 decoded video frames. This player uses audio position
+to schedule video, so capture gaps can interrupt both media tracks at playback.
+The live diagnostic used SDL dummy output and did not save captured media.
+
+A fresh four-second microphone-source comparison observed 128 queue drops and
+115 missing AUs with the device default, versus 188 received AUs, zero queue
+drops, zero missing AUs and zero AUs older than 200 ms with a 50 ms buffer.
+MicrophoneConfig now requests 50 ms by default; explicit zero still selects
+the device default. Release server/player builds and the five relevant server
+tests passed. The currently running Debug executable remains unchanged until
+the user stops it and starts the rebuilt Release server. Full physical playback
+quality still requires verification after that restart.
+
+---

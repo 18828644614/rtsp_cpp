@@ -19,7 +19,7 @@ struct MicrophoneConfig {
     std::string device_name;
     int sample_rate = 0;      // 0：使用设备默认值。
     int channels = 0;
-    int audio_buffer_ms = 0;  // 0：使用设备默认缓冲，不表示零延迟。
+    int audio_buffer_ms = 50;
 };
 
 struct MicrophoneFormat {

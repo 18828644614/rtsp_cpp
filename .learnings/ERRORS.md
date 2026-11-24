@@ -473,3 +473,22 @@ exec_command failed: CreateProcess { message: "Rejected(\"Failed to create unifi
 - **Notes**: 已改为分段写入 UTF-8 文档，并检查目录锚点、代码块围栏、源码链接与编码。
 
 ---
+
+## [ERR-20261124-PATCH] Windows apply_patch argument handling
+
+**Logged**: 2026-11-24
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Piping a patch to the Windows apply_patch wrapper failed because its native
+entry point requires a UTF-8 patch argument. Passing a multiline argument
+through the batch wrapper then lost the required final patch marker.
+
+### Resolution
+Read the wrapper to locate the bundled native Codex executable, then pass the
+PowerShell here-string directly as its --codex-run-as-apply-patch argument.
+The native command preserved Unicode and line breaks and applied the patch.
+
+---
